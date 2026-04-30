@@ -199,13 +199,36 @@ fn apply_visibility(app: &AppHandle, visible: bool) {
 /// DPI-change events re-pin to the user's latest choice (§9.2).
 pub type CurrentCorner = Arc<Mutex<Corner>>;
 
+/// Label shown on the visibility toggle menu item for a given overlay
+/// visibility. Pulled out of `build_tray` so the main.rs
+/// `overlay:set-visible` listener can reuse the exact same wording when
+/// flipping the label after a visibility change from any source (tray,
+/// IPC/ctl, or initial bootstrap).
+fn visibility_menu_label(visible: bool) -> &'static str {
+    if visible {
+        "Hide"
+    } else {
+        "Show"
+    }
+}
+
 fn build_tray(
     app: &AppHandle,
     current_corner: CurrentCorner,
     state: AppState,
-) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    initial_visible: bool,
+) -> tauri::Result<MenuItem<tauri::Wry>> {
+    // A single toggle item that flips between "Show" and "Hide" based on
+    // the current overlay visibility. Displaying both at once (the old
+    // behavior) is confusing — at any moment only one of the two actions
+    // is meaningful.
+    let visibility = MenuItem::with_id(
+        app,
+        "toggle-visibility",
+        visibility_menu_label(initial_visible),
+        true,
+        None::<&str>,
+    )?;
     let pos_tl = MenuItem::with_id(app, "pos-tl", "Top left", true, None::<&str>)?;
     let pos_tr = MenuItem::with_id(app, "pos-tr", "Top right", true, None::<&str>)?;
     let pos_bl = MenuItem::with_id(app, "pos-bl", "Bottom left", true, None::<&str>)?;
@@ -224,7 +247,7 @@ fn build_tray(
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &position, &sep1, &prefs, &sep2, &quit])?;
+    let menu = Menu::with_items(app, &[&visibility, &position, &sep1, &prefs, &sep2, &quit])?;
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
@@ -247,12 +270,11 @@ fn build_tray(
                 // handler and a follow-up tca-timer-ctl timer toggle
                 // always see the tray's effect. The Handler impl on
                 // AppState already applies the Tauri window show/hide
-                // via its `set_visible` effect.
-                "show" => {
-                    let _ = state_for_tray.timer_show();
-                }
-                "hide" => {
-                    let _ = state_for_tray.timer_hide();
+                // via its `set_visible` effect, which also fires the
+                // `overlay:set-visible` event we listen for in main.rs
+                // to update this menu item's label.
+                "toggle-visibility" => {
+                    let _ = state_for_tray.timer_toggle();
                 }
                 "pos-tl" => reposition(Corner::TopLeft, "topLeft"),
                 "pos-tr" => reposition(Corner::TopRight, "topRight"),
@@ -269,7 +291,7 @@ fn build_tray(
         })
         .on_tray_icon_event(|_icon, _event: TrayIconEvent| {})
         .build(app)?;
-    Ok(())
+    Ok(visibility)
 }
 
 fn main() {
@@ -361,8 +383,39 @@ fn main() {
             // route through it — otherwise AppState.visible would
             // drift away from the real window state and /status would
             // lie.
-            if let Err(err) = build_tray(&handle, current_corner.clone(), state.clone()) {
-                eprintln!("tca-timer: tray init failed: {err}");
+            //
+            // The tray holds a single toggle item whose label needs to
+            // track the overlay's visibility (so it reads "Hide" while
+            // visible and "Show" while hidden — never both at once).
+            // `build_tray` returns the live `MenuItem` handle so we can
+            // update the label whenever visibility changes from ANY
+            // source: the tray item itself, the IPC /timer/show/hide/
+            // toggle surface, or the initial-state logic above.
+            let visibility_item = match build_tray(
+                &handle,
+                current_corner.clone(),
+                state.clone(),
+                initial_visible,
+            ) {
+                Ok(item) => Some(item),
+                Err(err) => {
+                    eprintln!("tca-timer: tray init failed: {err}");
+                    None
+                }
+            };
+
+            if let Some(item) = visibility_item {
+                // `overlay:set-visible` is emitted by the `set_visible`
+                // effect closure above — i.e. by every AppState path
+                // that actually changes visibility (tray toggle, IPC
+                // show/hide/toggle). Listening here means we update
+                // the label exactly once per real visibility change.
+                handle.listen("overlay:set-visible", move |event| {
+                    let visible: bool = serde_json::from_str(event.payload()).unwrap_or(true);
+                    if let Err(err) = item.set_text(visibility_menu_label(visible)) {
+                        eprintln!("tca-timer: failed to update visibility menu label: {err}",);
+                    }
+                });
             }
 
             // Listen for overlay frontend status updates (§9.6.2 /status).
