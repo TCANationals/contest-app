@@ -12,7 +12,7 @@
 
 import type { HelpQueue, TimerState } from '../store/types';
 
-type Listener = (data: string) => void;
+type Listener = (ev: { data?: string } & Record<string, unknown>) => void;
 
 interface DemoRoom {
   displayLabel: string;
@@ -172,13 +172,13 @@ export class DemoJudgeSocket {
     if (this.readyState === 3) return;
     this.readyState = 3;
     if (this.unsubscribe) this.unsubscribe();
-    this.emit('close', '');
+    this.emit('close');
   }
 
   private open() {
     if (this.readyState === 3) return;
     this.readyState = 1;
-    this.emit('open', '');
+    this.emit('open');
     const r = rooms[this.room];
     if (!r) {
       return;
@@ -209,12 +209,14 @@ export class DemoJudgeSocket {
     this.unsubscribe = () => window.clearTimeout(id);
   }
 
-  private emit(kind: string, data: string) {
+  private emit(kind: string, data?: string) {
     const arr = this.listeners[kind];
     if (!arr) return;
+    const ev: { data?: string; type: string } = { type: kind };
+    if (data !== undefined) ev.data = data;
     for (const l of arr) {
       try {
-        l(data);
+        l(ev);
       } catch {
         /* noop */
       }
@@ -298,12 +300,22 @@ export function installDemoMode(): void {
   };
 
   const realWS = window.WebSocket;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as unknown as { WebSocket: any }).WebSocket = function (url: string) {
+  const Factory = function (url: string, protocols?: string | string[]) {
     const u = new URL(url, window.location.origin);
-    if (u.pathname === '/judge') return new DemoJudgeSocket(url);
-    return new realWS(url);
-  };
+    if (u.pathname === '/judge') {
+      return new DemoJudgeSocket(url) as unknown as WebSocket;
+    }
+    return protocols === undefined
+      ? new realWS(url)
+      : new realWS(url, protocols);
+  } as unknown as typeof WebSocket;
+  // Preserve the readyState constants so calling code like
+  // `ws.readyState === WebSocket.OPEN` keeps working in demo mode.
+  (Factory as unknown as { CONNECTING: number }).CONNECTING = 0;
+  (Factory as unknown as { OPEN: number }).OPEN = 1;
+  (Factory as unknown as { CLOSING: number }).CLOSING = 2;
+  (Factory as unknown as { CLOSED: number }).CLOSED = 3;
+  (window as unknown as { WebSocket: typeof WebSocket }).WebSocket = Factory;
 }
 
 function jsonResponse(obj: unknown): Response {
