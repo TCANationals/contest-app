@@ -357,17 +357,21 @@ fn main() {
             ipc_server::run(state_for_ipc);
 
             // Listen for overlay frontend status updates (§9.6.2 /status).
+            //
+            // Only `connection-changed` is wired today. `help_pending` is
+            // owned authoritatively by `AppState` (set by
+            // `do_help_request`, cleared by `do_help_cancel` — both IPC
+            // paths), and the contestant overlay has no click surface to
+            // toggle it independently. If the server ever defines a
+            // contestant-visible HELP_ACK frame (§7.1 mentions a
+            // "judge acknowledged" toast, but §5.2 does not yet list the
+            // frame), the frontend can emit `overlay:help-pending-changed`
+            // on receipt and we'll re-add a listener here.
             let state_for_listen = state.clone();
             handle.listen("overlay:connection-changed", move |event| {
                 let connected: bool =
                     serde_json::from_str(event.payload()).unwrap_or(false);
                 state_for_listen.set_connected(connected);
-            });
-            let state_for_pending = state.clone();
-            handle.listen("overlay:help-pending-changed", move |event| {
-                let pending: bool =
-                    serde_json::from_str(event.payload()).unwrap_or(false);
-                state_for_pending.mark_help_pending(pending);
             });
 
             eprintln!("tca-timer: preferences {}", prefs_action_log);

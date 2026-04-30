@@ -93,6 +93,12 @@ impl AppState {
         }
     }
 
+    /// Reserved for a future contestant-visible HELP_ACK frame from the
+    /// server (see §7.1). No current code path calls it — `help_pending`
+    /// is driven entirely by the IPC `do_help_request` / `do_help_cancel`
+    /// paths — but we keep it so when the server protocol grows the ack
+    /// frame, the WS client has a clean spot to plumb it in.
+    #[allow(dead_code)]
     pub fn mark_help_pending(&self, pending: bool) {
         let mut g = self.inner.lock().expect("AppState poisoned");
         g.help_pending = pending;

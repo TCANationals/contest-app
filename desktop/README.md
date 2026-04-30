@@ -52,6 +52,12 @@ one. `room` and `roomToken` have no default — if either is missing, the
 overlay shows a red "Configuration error" banner listing each tried source
 and does NOT attempt to connect.
 
+The CSP scopes `connect-src` to `wss://*.tcanationals.com` (plus loopback
+for local development), so any runtime-configured server host MUST live
+under that parent domain. Hosts outside that scope will be rejected by the
+WebView — update the CSP in `src-tauri/tauri.conf.json` and `index.html`
+together if you need to widen it.
+
 ## Commands (frontend only, no Rust required)
 
 ```bash
