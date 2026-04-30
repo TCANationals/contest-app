@@ -1,36 +1,40 @@
-import { Routes, Route, Link } from 'react-router-dom';
+import { useMemo } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
-import { TimerPage } from './pages/Timer';
+import { AppLayout } from './components/AppLayout';
 import { HelpPage } from './pages/Help';
 import { LogPage } from './pages/Log';
-import { SettingsPage } from './pages/Settings';
-import { RoomsPage } from './pages/Rooms';
 import { ProjectorPage } from './pages/Projector';
+import { RoomsPage } from './pages/Rooms';
+import { SettingsPage } from './pages/Settings';
+import { TimerPage } from './pages/Timer';
 
 export function App() {
+  const location = useLocation();
+  const roomParam = useMemo(
+    () => new URLSearchParams(location.search).get('room'),
+    [location.search],
+  );
+
+  // Projector is chrome-less (§10.5).
+  if (location.pathname === '/projector') {
+    return (
+      <Routes>
+        <Route path="/projector" element={<ProjectorPage />} />
+      </Routes>
+    );
+  }
+
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '1rem' }}>
-      <header style={{ marginBottom: '1rem' }}>
-        <strong>TCA Timer</strong>
-        <nav style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-          <Link to="/">Timer</Link>
-          <Link to="/help">Help</Link>
-          <Link to="/log">Log</Link>
-          <Link to="/settings">Settings</Link>
-          <Link to="/rooms">Rooms</Link>
-          <Link to="/projector">Projector</Link>
-        </nav>
-      </header>
-      <main>
-        <Routes>
-          <Route path="/" element={<TimerPage />} />
-          <Route path="/help" element={<HelpPage />} />
-          <Route path="/log" element={<LogPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/rooms" element={<RoomsPage />} />
-          <Route path="/projector" element={<ProjectorPage />} />
-        </Routes>
-      </main>
-    </div>
+    <AppLayout room={roomParam}>
+      <Routes>
+        <Route path="/" element={<TimerPage />} />
+        <Route path="/help" element={<HelpPage />} />
+        <Route path="/log" element={<LogPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/rooms" element={<RoomsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AppLayout>
   );
 }
