@@ -14,6 +14,7 @@ import {
   safeSend,
   writeAudit,
   persistTimer,
+  scheduleHeadNotification,
   type RoomState,
 } from '../rooms.js';
 import { getRoom } from '../db/dal.js';
@@ -52,7 +53,7 @@ export function registerJudgeWs(app: FastifyInstance): void {
       if (!rec) return closeWith(socket, 1008, 'bad_ticket');
       if (!hasRoomAccess(rec.groups, roomId)) return closeWith(socket, 1008, 'forbidden_room');
 
-      const room = getOrCreateRoomState(roomId);
+      const room = getOrCreateRoomState(roomId, roomRow.display_label);
       if (room.judges.size + room.contestants.size >= ROOM_CONNECTION_CAP) {
         return closeWith(socket, 1008, 'room_full');
       }
@@ -185,6 +186,13 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
       if (notifyJob) {
         notifyJob.cancel();
         ctx.room.notifyJobs.delete(contestantId);
+        // If other contestants are still waiting, kick off a fresh
+        // 5-second debounce for the new head. Otherwise judges who were
+        // debounced on the acked requester would never be alerted to the
+        // remaining queue entries.
+        if (ctx.room.helpQueue.entries.length > 0) {
+          scheduleHeadNotification(ctx.room);
+        }
       }
 
       writeAudit({

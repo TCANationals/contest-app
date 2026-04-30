@@ -14,6 +14,7 @@ import {
   stateFrame,
   safeSend,
   writeAudit,
+  scheduleHeadNotification,
   type RoomState,
 } from '../rooms.js';
 import { getRoom, getStationNumber } from '../db/dal.js';
@@ -24,7 +25,6 @@ import {
   ROOM_CONNECTION_CAP,
   type LimitKey,
 } from '../ratelimit.js';
-import { scheduleNotification, type DispatchHandle } from '../notify/dispatcher.js';
 
 interface ContestantSocketCtx {
   room: RoomState;
@@ -55,7 +55,7 @@ export function registerContestantWs(app: FastifyInstance): void {
       const tokenOk = await verifyRoomTokenHash(token, roomRow.token_hash).catch(() => false);
       if (!tokenOk) return closeWith(socket, 1008, 'bad_token');
 
-      const room = getOrCreateRoomState(roomId);
+      const room = getOrCreateRoomState(roomId, roomRow.display_label);
       if (room.judges.size + room.contestants.size >= ROOM_CONNECTION_CAP) {
         return closeWith(socket, 1008, 'room_full');
       }
@@ -158,12 +158,16 @@ function handleContestantFrame(
 }
 
 async function handleHelpRequest(ctx: ContestantSocketCtx): Promise<void> {
+  // The empty-check + queue mutation + schedule decision is kept fully
+  // synchronous. Doing the station-number lookup before mutating the queue
+  // would let a concurrent HELP_REQUEST sneak in during the `await` and
+  // cause us to mis-observe `wasEmpty=true` for a second triggering
+  // contestant, resulting in duplicate notification jobs.
   const wasEmpty = ctx.room.helpQueue.entries.length === 0;
-  const station = await getStationNumber(ctx.room.id, ctx.contestantId).catch(() => null);
-  const res = helpRequest(ctx.room.helpQueue, ctx.contestantId, station);
+  const res = helpRequest(ctx.room.helpQueue, ctx.contestantId, null);
   if (!res.changed) return;
-
   ctx.room.helpQueue = res.queue;
+
   writeAudit({
     room: ctx.room.id,
     atServerMs: Date.now(),
@@ -175,16 +179,20 @@ async function handleHelpRequest(ctx: ContestantSocketCtx): Promise<void> {
   broadcastHelpQueueToJudges(ctx.room);
 
   if (wasEmpty) {
-    const handle: DispatchHandle = scheduleNotification({
-      room: ctx.room.id,
-      displayLabel: ctx.displayLabel,
-      contestantId: ctx.contestantId,
-      requestedAtServerMs: Date.now(),
-      getQueue: () => ctx.room.helpQueue,
-      judgeAckedAt: ctx.room.judgeAckedAt,
-      publicOrigin: process.env.PUBLIC_ORIGIN ?? '',
-    });
-    ctx.room.notifyJobs.set(ctx.contestantId, handle);
+    scheduleHeadNotification(ctx.room, ctx.displayLabel);
+  }
+
+
+  // Look up the station number after the state change is committed. Any
+  // mismatch triggers a follow-up broadcast so judges see the station
+  // info once it's available.
+  const station = await getStationNumber(ctx.room.id, ctx.contestantId).catch(() => null);
+  if (station != null) {
+    const entry = ctx.room.helpQueue.entries.find((e) => e.contestantId === ctx.contestantId);
+    if (entry && entry.stationNumber !== station) {
+      entry.stationNumber = station;
+      broadcastHelpQueueToJudges(ctx.room);
+    }
   }
 }
 
@@ -197,6 +205,14 @@ function handleHelpCancel(ctx: ContestantSocketCtx): void {
   if (existing) {
     existing.cancel();
     ctx.room.notifyJobs.delete(ctx.contestantId);
+    // If the canceled entry was the head of the queue and there are still
+    // other contestants waiting, restart the 5-second notify debounce for
+    // the new head. Otherwise judges whose notification was debounced on
+    // the canceled requester would never be alerted to the remaining
+    // queue entries.
+    if (ctx.room.helpQueue.entries.length > 0) {
+      scheduleHeadNotification(ctx.room, ctx.displayLabel);
+    }
   }
 
   writeAudit({
