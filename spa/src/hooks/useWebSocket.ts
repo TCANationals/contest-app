@@ -34,6 +34,12 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
 
   const closedRef = useRef(false);
   const attemptRef = useRef(0);
+  // Tracks whether we have ever opened a socket on this hook instance. Used
+  // to pick between 'connecting' (initial dial) and 'reconnecting' (any
+  // dial after the first successful open) for the status pill — the post-
+  // increment in scheduleReconnect leaves attempt=0 right after a clean
+  // open+drop, which would otherwise misreport the status.
+  const wasConnectedRef = useRef(false);
   const socketRef = useRef<WebSocket | null>(null);
   const trackerRef = useRef<OffsetTracker>(new OffsetTracker());
   const timersRef = useRef<{ reconnect?: number; pingIv?: number; warm?: number[] }>({});
@@ -83,7 +89,9 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       const attempt = attemptRef.current++;
       const base = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 4));
       const delay = Math.floor(Math.random() * base);
-      setConnection(attempt === 0 ? 'connecting' : 'reconnecting');
+      setConnection(
+        attempt === 0 && !wasConnectedRef.current ? 'connecting' : 'reconnecting',
+      );
       timersRef.current.reconnect = window.setTimeout(() => {
         void connect();
       }, delay);
@@ -95,7 +103,11 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
 
     const connect = async () => {
       if (closedRef.current) return;
-      setConnection(attemptRef.current === 0 ? 'connecting' : 'reconnecting');
+      setConnection(
+        attemptRef.current === 0 && !wasConnectedRef.current
+          ? 'connecting'
+          : 'reconnecting',
+      );
       let ticket: string;
       try {
         ticket = await mintTicketRef.current();
@@ -126,6 +138,7 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       ws.addEventListener('open', () => {
         if (closedRef.current || !isCurrent()) return;
         attemptRef.current = 0;
+        wasConnectedRef.current = true;
         trackerRef.current.reset();
         setConnection('connected');
         setError(null);

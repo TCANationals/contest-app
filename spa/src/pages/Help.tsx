@@ -1,55 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { sendFrame, useAppStore } from '../store';
-
-/**
- * Empty→non-empty queue chime (§7.2).
- *
- * We intentionally synthesize the tone with the WebAudio API instead of
- * shipping a binary asset: it keeps the SPA dependency-free, avoids a 404
- * when the asset is missing, and gives a short, pleasant blip on any device
- * whose audio context we have the user-gesture permission to resume.
- */
-function playChime() {
-  try {
-    const Ctx =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = 880;
-    osc.type = 'sine';
-    gain.gain.value = 0;
-    gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.02);
-    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.45);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.5);
-    setTimeout(() => ctx.close(), 800);
-  } catch {
-    /* audio blocked until user gesture — skip silently. */
-  }
-}
 
 export function HelpPage() {
   const [params] = useSearchParams();
   const room = params.get('room');
   const queue = useAppStore((s) => s.helpQueue);
-  const prevCount = useRef<number>(0);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (!queue) return;
-    const count = queue.entries.length;
-    // §7.2: chime only on empty→non-empty transition; subsequent adds are silent.
-    if (prevCount.current === 0 && count > 0) {
-      playChime();
-    }
-    prevCount.current = count;
-  }, [queue]);
 
   const rows = useMemo(() => queue?.entries ?? [], [queue]);
 

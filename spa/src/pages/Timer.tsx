@@ -15,12 +15,14 @@ export function TimerPage() {
   const [duration, setDuration] = useState({ mm: '30', ss: '00' });
   const [message, setMessage] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [undoPayload, setUndoPayload] = useState<{
-    prevStatus: 'idle' | 'running' | 'paused';
-    prevEndsAtServerMs: number | null;
-    prevRemainingMs: number | null;
-    expires: number;
-  } | null>(null);
+  // Spec §10.4: a 30 s "undo" affordance after a fresh set. The undo simply
+  // resets the timer back to idle — capturing prior status/endsAt/remaining
+  // would only be useful if we restored the previous state, which would
+  // require a TIMER_SET with the leftover ms (and a paused→running variant
+  // we don't have on the wire). Keep the payload to just the expiry.
+  const [undoPayload, setUndoPayload] = useState<{ expires: number } | null>(
+    null,
+  );
   const undoTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -37,7 +39,6 @@ export function TimerPage() {
     const durationMs = (mm * 60 + ss) * 1000;
     if (durationMs <= 0) return;
 
-    const prev = timer;
     const payload: { type: 'TIMER_SET'; durationMs: number; message?: string } = {
       type: 'TIMER_SET',
       durationMs,
@@ -45,12 +46,7 @@ export function TimerPage() {
     if (message) payload.message = message;
     if (!sendFrame(payload)) return;
 
-    setUndoPayload({
-      prevStatus: prev?.status ?? 'idle',
-      prevEndsAtServerMs: prev?.endsAtServerMs ?? null,
-      prevRemainingMs: prev?.remainingMs ?? null,
-      expires: Date.now() + 30_000,
-    });
+    setUndoPayload({ expires: Date.now() + 30_000 });
     if (undoTimer.current) window.clearTimeout(undoTimer.current);
     undoTimer.current = window.setTimeout(() => setUndoPayload(null), 30_000);
   };

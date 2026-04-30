@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import './index.css';
 import { App } from './App';
+import { installQueueChime } from './lib/chime';
 import { demoModeActive, installDemoMode } from './lib/demoMode';
 import { useAppStore } from './store';
 
@@ -14,6 +15,11 @@ if (demoModeActive()) {
   (window as unknown as { __TCA_STORE__: typeof useAppStore }).__TCA_STORE__ =
     useAppStore;
 }
+
+// §7.2 chime is wired once at app startup — outside any component — so it
+// fires only on real empty→non-empty queue transitions and not when the
+// user navigates back to /help with an already-non-empty queue.
+installQueueChime();
 
 const queryClient = new QueryClient({
   defaultOptions: {
