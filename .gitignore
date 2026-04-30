@@ -138,6 +138,9 @@ Thumbs.db
 # Rust / Tauri build outputs
 target/
 desktop/src-tauri/gen/
+# `tca-timer-ctl` sidecar binaries are produced by `npm run build:ctl`
+# (invoked automatically by Tauri's beforeBundleCommand) and copied here
+# with a per-target-triple suffix. They are derived artifacts.
 desktop/src-tauri/binaries/
 
 # Vite build outputs

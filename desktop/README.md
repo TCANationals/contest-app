@@ -160,3 +160,38 @@ npm run tauri build   # .msi on Windows, .app/.dmg on macOS, AppImage/deb on Lin
 The Windows MSI is the official artifact per §9.1; the macOS `.app`
 bundle is provided for local development and is not yet signed or
 notarized (the contest environment runs on Windows).
+
+### `tca-timer-ctl` is bundled as a sidecar
+
+The `tca-timer-ctl` shortcut helper (§9.6.3) is shipped inside the
+installer alongside `tca-timer-desktop` on every OS:
+
+| Bundle           | Sidecar location                                                          |
+| :--------------- | :------------------------------------------------------------------------ |
+| Windows MSI/NSIS | `%LOCALAPPDATA%\TCA Timer\tca-timer-ctl.exe` (alongside `tca-timer-desktop.exe`) |
+| macOS .app/.dmg  | `TCA Timer.app/Contents/MacOS/tca-timer-ctl`                              |
+| Linux .deb/.rpm  | `/usr/bin/tca-timer-ctl`                                                  |
+| Linux AppImage   | `usr/bin/tca-timer-ctl` inside the AppImage                               |
+
+This is wired up via `bundle.externalBin` in `src-tauri/tauri.conf.json`,
+which expects a binary named
+`src-tauri/binaries/tca-timer-ctl-<target-triple>(.exe)` to exist
+before `cargo build` runs. We produce that file on demand from the
+`build:ctl` npm script (`scripts/build-ctl.mjs`) and chain it into the
+two Tauri hook commands the CLI runs at the right time:
+
+- `beforeDevCommand` → `prep:dev` → `build:ctl` + `vite`
+- `beforeBuildCommand` → `prep:build` → `build:ctl` + `tsc -b` + `vite build`
+
+The script reads `TAURI_ENV_TARGET_TRIPLE` and `TAURI_ENV_DEBUG` to
+match the host app's profile and target. When run outside a Tauri
+hook (`npm run build:ctl` directly) it falls back to
+`rustc --print host-tuple` and the debug profile.
+
+Running it manually:
+
+```bash
+npm run build:ctl                       # debug, host triple
+npm run build:ctl -- --release          # release, host triple
+TAURI_ENV_TARGET_TRIPLE=aarch64-apple-darwin npm run build:ctl -- --release
+```
