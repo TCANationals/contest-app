@@ -21,19 +21,31 @@ export function isInQuietHours(cfg: QuietHoursConfig, now: Date = new Date()): b
   if (weekdays === 0) return false;
 
   const tzParts = localParts(now, timezone);
-  const dow = tzParts.weekday;
-  if (((weekdays >> dow) & 1) === 0) return false;
-
   const nowSec = tzParts.secondOfDay;
   const startSec = parseTime(start);
   const endSec = parseTime(end);
   if (startSec == null || endSec == null) return false;
 
   if (endSec >= startSec) {
+    // Same-day window: the configured weekday is the only relevant bit.
+    if (((weekdays >> tzParts.weekday) & 1) === 0) return false;
     return nowSec >= startSec && nowSec < endSec;
   }
-  // overnight window wraps midnight
-  return nowSec >= startSec || nowSec < endSec;
+
+  // Overnight window (end < start) — splits across two calendar days.
+  // Evening portion (>= start): the window is "owned" by today's weekday bit.
+  // Morning portion  (< end):   the window started YESTERDAY, so the relevant
+  // weekday bit is yesterday's. Without this distinction, e.g. quiet hours
+  // 22:00–06:00 with only Thu enabled would miss Fri 02:00 even though that
+  // is the tail end of the Thursday window.
+  if (nowSec >= startSec) {
+    return ((weekdays >> tzParts.weekday) & 1) !== 0;
+  }
+  if (nowSec < endSec) {
+    const yesterday = (tzParts.weekday + 6) % 7;
+    return ((weekdays >> yesterday) & 1) !== 0;
+  }
+  return false;
 }
 
 function parseTime(hhmmss: string): number | null {

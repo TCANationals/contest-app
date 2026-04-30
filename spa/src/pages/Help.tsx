@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { sendFrame, useAppStore } from '../store';
@@ -132,12 +132,26 @@ function HelpRow({
     return () => window.clearInterval(id);
   }, []);
   const waitMs = Math.max(0, Date.now() - requestedAtServerMs);
+  // The whole row is a clickable surface that expands details on phones, and
+  // hosts the desktop-aligned Acknowledge button. We MUST NOT use a `<button>`
+  // for the outer surface, since it would nest the inner Acknowledge button —
+  // invalid HTML per the content model spec, and unreliable click-handling
+  // across browsers/screen readers. Use a `<div role="button">` instead so
+  // the inner real `<button>` remains a top-level interactive element.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggle();
+    }
+  };
   return (
     <li className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onToggle}
-        className="w-full min-h-[56px] px-4 py-3 flex items-center gap-3 text-left hover:bg-slate-50"
+        onKeyDown={onKeyDown}
+        className="w-full min-h-[56px] px-4 py-3 flex items-center gap-3 text-left hover:bg-slate-50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2"
         aria-expanded={expanded}
       >
         <div className="flex-1">
@@ -153,19 +167,17 @@ function HelpRow({
             Waiting {formatWait(waitMs)}
           </div>
         </div>
-        <span className="hidden sm:inline-block">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onAck();
-            }}
-            className="bg-slate-900 text-white px-4 py-2 rounded-lg font-medium"
-          >
-            Acknowledge
-          </button>
-        </span>
-      </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAck();
+          }}
+          className="hidden sm:inline-block bg-slate-900 text-white px-4 py-2 rounded-lg font-medium"
+        >
+          Acknowledge
+        </button>
+      </div>
       {expanded && (
         <div className="px-4 pb-3 sm:hidden">
           <button

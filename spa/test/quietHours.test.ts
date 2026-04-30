@@ -74,6 +74,41 @@ describe('isInQuietHours', () => {
     expect(isInQuietHours(cfg, utc(30, 12))).toBe(false);
   });
 
+  it('overnight: morning tail uses the previous day weekday bit', () => {
+    // Quiet 22:00–06:00, only Thursday (bit 4) enabled.
+    const cfg = {
+      start: '22:00',
+      end: '06:00',
+      weekdays: 1 << 4,
+      timezone: 'UTC',
+    };
+    // Thu (Apr 30) 23:00 — evening half, Thursday bit applies → true.
+    expect(isInQuietHours(cfg, utc(30, 23))).toBe(true);
+    // Fri (May 1) 02:00 — morning tail of the Thursday window → true.
+    expect(isInQuietHours(cfg, new Date(Date.UTC(2026, 4, 1, 2, 0, 0)))).toBe(true);
+    // Fri (May 1) 23:00 — evening, but Friday bit not set → false.
+    expect(isInQuietHours(cfg, new Date(Date.UTC(2026, 4, 1, 23, 0, 0)))).toBe(false);
+    // Sat (May 2) 02:00 — morning tail belongs to Friday, also not set → false.
+    expect(isInQuietHours(cfg, new Date(Date.UTC(2026, 4, 2, 2, 0, 0)))).toBe(false);
+  });
+
+  it("overnight: weekday bit only applies to that day's evening half", () => {
+    // Quiet 22:00–06:00, only Sunday enabled.
+    const cfg = {
+      start: '22:00',
+      end: '06:00',
+      weekdays: 1 << 0,
+      timezone: 'UTC',
+    };
+    // Sun 23:00 → evening half, Sunday bit set → true.
+    // 2026-05-03 is a Sunday.
+    expect(isInQuietHours(cfg, new Date(Date.UTC(2026, 4, 3, 23, 0, 0)))).toBe(true);
+    // Mon 02:00 → tail of the Sunday window → true.
+    expect(isInQuietHours(cfg, new Date(Date.UTC(2026, 4, 4, 2, 0, 0)))).toBe(true);
+    // Sun 02:00 → tail belongs to Saturday, not set → false.
+    expect(isInQuietHours(cfg, new Date(Date.UTC(2026, 4, 3, 2, 0, 0)))).toBe(false);
+  });
+
   it('respects non-UTC timezone when evaluating weekday/time-of-day', () => {
     // 2026-04-30 03:00 UTC is 2026-04-29 22:00 America/Chicago (Wed),
     // which falls inside a 20:00–23:00 quiet window restricted to Wed (bit 3).

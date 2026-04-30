@@ -48,15 +48,20 @@ export class ApiError extends Error {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  // Merge headers explicitly *after* spreading `init`, so a caller-supplied
+  // `headers` object on `init` cannot accidentally clobber our defaults
+  // (accept / content-type). Caller-provided header keys still win because
+  // they appear last inside the merged object literal.
+  const merged: RequestInit = {
     credentials: 'include',
+    ...init,
     headers: {
       accept: 'application/json',
       'content-type': 'application/json',
-      ...(init?.headers ?? {}),
+      ...(init?.headers as Record<string, string> | undefined),
     },
-    ...init,
-  });
+  };
+  const res = await fetch(path, merged);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, text || `${res.status} ${res.statusText}`);
