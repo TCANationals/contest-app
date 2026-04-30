@@ -59,6 +59,16 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       return;
     }
 
+    // Per-effect-instance cancellation flag. We MUST NOT rely solely on the
+    // shared `closedRef` here: when `room` changes, React invokes the new
+    // effect *and* runs the previous effect's cleanup. A `connect()` from the
+    // prior effect may already be awaiting `mintTicket()` — by the time it
+    // resumes, the new effect has set `closedRef.current = false` again, so
+    // the old connect would create a WebSocket, assign it to socketRef, and
+    // be promptly orphaned by the new effect's connect (timers leaked).
+    // Closure-scope `cancelled` is local to *this* effect run only.
+    let cancelled = false;
+
     closedRef.current = false;
 
     const send = (frame: JudgeOutboundFrame): boolean => {
@@ -85,7 +95,7 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
     };
 
     const scheduleReconnect = () => {
-      if (closedRef.current) return;
+      if (cancelled || closedRef.current) return;
       const attempt = attemptRef.current++;
       // Spec §6.4: exponential backoff with full jitter — base delays
       // 1, 2, 4, 8, 16 s, capped at 30 s. Earlier code capped the exponent
@@ -107,7 +117,7 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
     };
 
     const connect = async () => {
-      if (closedRef.current) return;
+      if (cancelled || closedRef.current) return;
       setConnection(
         attemptRef.current === 0 && !wasConnectedRef.current
           ? 'connecting'
@@ -117,14 +127,15 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       try {
         ticket = await mintTicketRef.current();
       } catch (err) {
-        if (closedRef.current) return;
+        if (cancelled || closedRef.current) return;
         setError({ code: 'TICKET_FAILED', message: (err as Error).message });
         scheduleReconnect();
         return;
       }
-      // A React StrictMode cleanup/re-mount may have flipped closedRef while
-      // we were awaiting the ticket. If so, do not create a stray socket.
-      if (closedRef.current) return;
+      // The effect cleanup (room change, unmount, StrictMode re-run) may have
+      // flipped `cancelled` while we were awaiting the ticket. If so, do not
+      // create a stray socket — the new effect run owns the connection now.
+      if (cancelled || closedRef.current) return;
 
       const base = wsBase ?? defaultWsBase();
       const url = `${base}/judge?room=${encodeURIComponent(room)}&ticket=${encodeURIComponent(ticket)}`;
@@ -141,7 +152,7 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       const isCurrent = () => socketRef.current === ws;
 
       ws.addEventListener('open', () => {
-        if (closedRef.current || !isCurrent()) return;
+        if (cancelled || closedRef.current || !isCurrent()) return;
         attemptRef.current = 0;
         wasConnectedRef.current = true;
         trackerRef.current.reset();
@@ -212,6 +223,7 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       if (
         document.visibilityState === 'visible' &&
         (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) &&
+        !cancelled &&
         !closedRef.current
       ) {
         attemptRef.current = 0;
@@ -240,6 +252,10 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
+      // Mark this effect-run cancelled so any in-flight async connect()
+      // started in this run bails when its mintTicket() resolves, even if a
+      // subsequent effect re-runs and re-sets `closedRef.current = false`.
+      cancelled = true;
       closedRef.current = true;
       document.removeEventListener('visibilitychange', onVisible);
       cleanupTimers();
