@@ -16,6 +16,13 @@ export interface WsClientOptions {
   onStatus: (status: ConnectionStatus) => void;
   onOffset: (offsetMs: number) => void;
   /**
+   * Called with `true` when a HELP_REQUEST frame successfully lands on
+   * the wire (direct send or reconnect flush), `false` when a
+   * HELP_CANCEL frame lands. Used by the overlay to keep the Rust-side
+   * `AppState.help_pending` in sync via `overlay:help-pending-changed`.
+   */
+  onHelpPendingChanged?: (pending: boolean) => void;
+  /**
    * Optional WebSocket implementation injection (for tests). Defaults to
    * the global `WebSocket`.
    */
@@ -70,12 +77,18 @@ export class WsClient {
       this.pendingHelpRequest = true;
       return false;
     }
+    this.opts.onHelpPendingChanged?.(true);
     return true;
   }
 
   sendHelpCancel(): boolean {
+    const wasQueued = this.pendingHelpRequest;
     this.pendingHelpRequest = false;
-    return this.sendFrame({ type: 'HELP_CANCEL' });
+    const sent = this.sendFrame({ type: 'HELP_CANCEL' });
+    if (sent || wasQueued) {
+      this.opts.onHelpPendingChanged?.(false);
+    }
+    return sent;
   }
 
   private connect(): void {
@@ -97,10 +110,9 @@ export class WsClient {
       this.tracker.clear();
       this.opts.onStatus({ connected: true, attempt: 0 });
       this.runWarmupBurst();
-      if (this.pendingHelpRequest) {
-        if (this.sendFrame({ type: 'HELP_REQUEST' })) {
-          this.pendingHelpRequest = false;
-        }
+      if (this.pendingHelpRequest && this.sendFrame({ type: 'HELP_REQUEST' })) {
+        this.pendingHelpRequest = false;
+        this.opts.onHelpPendingChanged?.(true);
       }
     };
 

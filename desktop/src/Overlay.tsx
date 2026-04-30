@@ -73,8 +73,11 @@ export function Overlay() {
   // derived `displayMs` below re-evaluates against the wall clock. Its
   // value is ignored.
   const [, setRenderTick] = useState(0);
-  const [flashPhase, setFlashPhase] = useState(false);
-  const [pulsePhase, setPulsePhase] = useState(false);
+  // Shared 1 Hz on/off phase for both the sub-minute pulse (§9.2) and
+  // the under-threshold flash (§9.5.2). When both apply simultaneously
+  // the flash (0/1) dominates the pulse (0.55/1); see the opacity
+  // calculation below.
+  const [blinkPhase, setBlinkPhase] = useState(false);
 
   const clientRef = useRef<WsClient | null>(null);
   const prevRemRef = useRef<number>(Number.POSITIVE_INFINITY);
@@ -142,6 +145,9 @@ export function Overlay() {
         void tauriEmit('overlay:connection-changed', c);
       },
       onOffset: (o) => setOffsetMs(o),
+      onHelpPendingChanged: (pending) => {
+        void tauriEmit('overlay:help-pending-changed', pending);
+      },
     });
     clientRef.current = client;
     client.start();
@@ -186,12 +192,11 @@ export function Overlay() {
     prevRemRef.current = computeRemainingMs(timer, offsetMs);
   }, [timer]);
 
-  // 1 Hz flash + pulse phase for under-threshold flashing and sub-minute
-  // pulse (§9.2 / §9.5.2). Purely cosmetic; does not affect timekeeping.
+  // 1 Hz on/off phase for flash + pulse (§9.2 / §9.5.2). Purely
+  // cosmetic; does not affect timekeeping.
   useEffect(() => {
     const id = setInterval(() => {
-      setFlashPhase((x) => !x);
-      setPulsePhase((x) => !x);
+      setBlinkPhase((x) => !x);
     }, 500);
     return () => clearInterval(id);
   }, []);
@@ -214,8 +219,17 @@ export function Overlay() {
   );
 
   const opacity = connected ? 1 : 0.7;
-  const pulseOpacity = style.pulse && pulsePhase ? 0.55 : 1;
-  const flashOpacity = flashing && flashPhase ? 0 : 1;
+  // §9.5.2 flash (color ↔ transparent) dominates §9.2 pulse (1 ↔ 0.55)
+  // when both apply in the final minute — otherwise multiplying them
+  // collapses to the same binary on/off and the softer pulse is never
+  // visible.
+  const digitOpacity = flashing
+    ? blinkPhase
+      ? 0
+      : 1
+    : style.pulse && blinkPhase
+      ? 0.55
+      : 1;
 
   if (!visible) {
     return null;
@@ -273,7 +287,7 @@ export function Overlay() {
           fontWeight: 700,
           color: style.color,
           WebkitTextStroke: `2px ${style.border}`,
-          opacity: pulseOpacity * flashOpacity,
+          opacity: digitOpacity,
           transition: 'opacity 150ms linear',
           lineHeight: 1,
         }}

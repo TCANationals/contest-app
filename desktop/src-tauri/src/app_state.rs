@@ -75,22 +75,15 @@ impl AppState {
     }
 
     pub fn set_connected(&self, connected: bool) {
-        // Decide whether a queued offline help-request should now be
-        // flushed, then DROP the guard before invoking the effect. The
-        // effect is a user-provided closure that may re-enter AppState
-        // (e.g., via `mark_help_pending` or in a test spy), which would
-        // deadlock if we still held the mutex. Mirrors the pattern in
-        // `do_help_request` / `do_help_cancel`.
-        let should_flush = {
-            let mut g = self.inner.lock().expect("AppState poisoned");
-            g.connected = connected;
-            connected && g.help_queued_offline && !g.help_pending
-        };
-        if should_flush && (self.effects.send_help_request)() {
-            let mut g = self.inner.lock().expect("AppState poisoned");
-            g.help_pending = true;
-            g.help_queued_offline = false;
-        }
+        // Just mirror the frontend-reported wire state. The frontend
+        // owns the offline help-request queue in `WsClient`; when it
+        // flushes on reconnect it emits
+        // `overlay:help-pending-changed=true`, which routes to
+        // `mark_help_pending` here. Doing our own flush would mean
+        // trusting a fire-and-forget Tauri emit's return value as
+        // "frame is on the wire", which it isn't.
+        let mut g = self.inner.lock().expect("AppState poisoned");
+        g.connected = connected;
     }
 
     /// Reserved for a future contestant-visible HELP_ACK frame from the
@@ -127,25 +120,44 @@ impl AppState {
     }
 
     fn do_help_request(&self) -> HelpRequestStatus {
-        let mut g = self.inner.lock().expect("AppState poisoned");
-        if g.help_pending {
-            return HelpRequestStatus::AlreadyPending;
-        }
-        if g.connected {
-            drop(g);
-            let sent = (self.effects.send_help_request)();
-            let mut g = self.inner.lock().expect("AppState poisoned");
-            if sent {
-                g.help_pending = true;
+        // Note on control flow: we always route the request through
+        // the frontend's WS client (via `send_help_request`, which is
+        // an emit into the WebView). The WS client holds the
+        // authoritative offline queue; when it succeeds in putting a
+        // frame on the wire — now, or on a later reconnect — it emits
+        // `overlay:help-pending-changed=true` back and
+        // `mark_help_pending` updates the flags below. We keep a
+        // synchronous optimistic update here so the IPC /status
+        // response reflects the caller's intent immediately.
+        let (status, report_connected) = {
+            let g = self.inner.lock().expect("AppState poisoned");
+            if g.help_pending {
+                return HelpRequestStatus::AlreadyPending;
+            }
+            let connected = g.connected;
+            let report = if connected {
                 HelpRequestStatus::Requested
             } else {
-                g.help_queued_offline = true;
                 HelpRequestStatus::QueuedOffline
-            }
+            };
+            (report, connected)
+        };
+
+        // Emit to the frontend so the WS client can try to send now or
+        // queue locally for flush on reconnect. The `send_help_request`
+        // effect is a Tauri emit — its return value tells us only
+        // whether the emit reached the WebView, not whether the WS
+        // frame landed; the `onHelpPendingChanged` callback carries
+        // that truth back.
+        let _ = (self.effects.send_help_request)();
+
+        let mut g = self.inner.lock().expect("AppState poisoned");
+        if report_connected {
+            g.help_pending = true;
         } else {
             g.help_queued_offline = true;
-            HelpRequestStatus::QueuedOffline
         }
+        status
     }
 
     fn do_help_cancel(&self) -> HelpCancelStatus {
@@ -249,19 +261,60 @@ mod tests {
     }
 
     #[test]
-    fn help_request_while_offline_is_queued_and_flushed_on_reconnect() {
+    fn help_request_while_offline_queues_and_still_forwards_to_frontend() {
+        // The frontend WS client owns the offline queue; Rust always
+        // forwards the request to it so it can try immediately or queue
+        // locally and flush on its own reconnect.
         let spy = Spy::new();
         let state = state_with(&spy);
         assert!(matches!(
             state.help_request(),
             HelpRequestStatus::QueuedOffline
         ));
-        assert_eq!(spy.help_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            spy.help_requests.load(Ordering::SeqCst),
+            1,
+            "request is forwarded to the WebView even when offline",
+        );
+        // /status reports pending-or-queued as true so callers see a
+        // single "you already asked for help" state.
         assert!(state.snapshot().help_pending);
+    }
 
+    #[test]
+    fn set_connected_only_tracks_wire_state() {
+        // After the refactor, set_connected does NOT re-emit a
+        // help-request on reconnect — the frontend WS client handles
+        // that via its own offline queue and reports success via
+        // `mark_help_pending(true)`.
+        let spy = Spy::new();
+        let state = state_with(&spy);
+        let _ = state.help_request();
+        let baseline = spy.help_requests.load(Ordering::SeqCst);
         state.set_connected(true);
-        assert_eq!(spy.help_requests.load(Ordering::SeqCst), 1);
-        assert!(state.snapshot().help_pending);
+        assert_eq!(
+            spy.help_requests.load(Ordering::SeqCst),
+            baseline,
+            "set_connected must not fire help-request effects",
+        );
+        assert!(state.snapshot().connected);
+    }
+
+    #[test]
+    fn mark_help_pending_clears_offline_queue_on_flush_notification() {
+        let spy = Spy::new();
+        let state = state_with(&spy);
+        let _ = state.help_request();
+        state.set_connected(true);
+        // Frontend has flushed and reports the frame landed.
+        state.mark_help_pending(true);
+        let snap = state.snapshot();
+        assert!(snap.help_pending);
+        // A second help_request while pending is now AlreadyPending.
+        assert!(matches!(
+            state.help_request(),
+            HelpRequestStatus::AlreadyPending,
+        ));
     }
 
     #[test]
@@ -306,13 +359,6 @@ mod tests {
             "offline-only cancel never hits the wire"
         );
         assert!(!state.snapshot().help_pending);
-
-        state.set_connected(true);
-        assert_eq!(
-            spy.help_requests.load(Ordering::SeqCst),
-            0,
-            "cancelled before connect so nothing is sent on reconnect"
-        );
     }
 
     #[test]

@@ -203,6 +203,61 @@ describe('WsClient', () => {
     c.stop();
   });
 
+  it('reports help-pending transitions via onHelpPendingChanged', () => {
+    const pendingTransitions: boolean[] = [];
+    const c = new WsClient({
+      url: 'wss://h',
+      onState: () => undefined,
+      onStatus: () => undefined,
+      onOffset: () => undefined,
+      onHelpPendingChanged: (p) => pendingTransitions.push(p),
+      WebSocketImpl: asWSImpl(),
+    });
+    c.start();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    // Direct send while online: fires `true`.
+    expect(c.sendHelpRequest()).toBe(true);
+    expect(pendingTransitions).toEqual([true]);
+
+    // Cancel fires `false`.
+    expect(c.sendHelpCancel()).toBe(true);
+    expect(pendingTransitions).toEqual([true, false]);
+
+    c.stop();
+  });
+
+  it('onHelpPendingChanged fires on reconnect flush of offline queue', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const pendingTransitions: boolean[] = [];
+    const c = new WsClient({
+      url: 'wss://h',
+      onState: () => undefined,
+      onStatus: () => undefined,
+      onOffset: () => undefined,
+      onHelpPendingChanged: (p) => pendingTransitions.push(p),
+      WebSocketImpl: asWSImpl(),
+    });
+    c.start();
+    const ws1 = FakeWebSocket.instances[0]!;
+
+    // Socket is CONNECTING — send fails and queues locally. No
+    // transition emitted because the frame isn't on the wire yet.
+    expect(c.sendHelpRequest()).toBe(false);
+    expect(pendingTransitions).toEqual([]);
+
+    ws1.simulateServerClose();
+    vi.advanceTimersByTime(1);
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!;
+    ws2.simulateOpen();
+    // Now the queued request is flushed on the wire; transition = true.
+    expect(pendingTransitions).toEqual([true]);
+    expect(ws2.sent.map((s) => JSON.parse(s).type)).toContain('HELP_REQUEST');
+
+    c.stop();
+  });
+
   it('queues help-request while offline and flushes on reconnect', () => {
     const c = new WsClient({
       url: 'wss://h',
