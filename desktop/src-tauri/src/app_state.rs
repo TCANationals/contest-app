@@ -165,18 +165,29 @@ impl AppState {
     }
 
     fn do_help_cancel(&self) -> HelpCancelStatus {
-        let mut g = self.inner.lock().expect("AppState poisoned");
-        let was_queued = g.help_queued_offline;
-        let was_pending = g.help_pending;
-        if !was_pending && !was_queued {
-            return HelpCancelStatus::NotPending;
-        }
-        g.help_queued_offline = false;
-        if was_pending {
-            drop(g);
-            let _ = (self.effects.send_help_cancel)();
-            self.inner.lock().expect("AppState poisoned").help_pending = false;
-        }
+        // Mirror the do_help_request policy: we always forward the
+        // cancel to the frontend so the WS client can drop any
+        // locally-queued HELP_REQUEST that hasn't made it onto the
+        // wire yet, send a HELP_CANCEL to the server if the request
+        // did land, or queue the cancel for reconnect if we need to
+        // tell the server later (see ws-client `pendingHelpCancel`).
+        // Without this the frontend would happily flush a stale
+        // help-request on reconnect after the user had already
+        // cancelled.
+        let (was_pending, was_queued) = {
+            let mut g = self.inner.lock().expect("AppState poisoned");
+            let was_queued = g.help_queued_offline;
+            let was_pending = g.help_pending;
+            if !was_pending && !was_queued {
+                return HelpCancelStatus::NotPending;
+            }
+            g.help_queued_offline = false;
+            g.help_pending = false;
+            (was_pending, was_queued)
+        };
+        let _ = was_queued;
+        let _ = was_pending;
+        let _ = (self.effects.send_help_cancel)();
         HelpCancelStatus::Cancelled
     }
 
@@ -377,17 +388,22 @@ mod tests {
     }
 
     #[test]
-    fn help_cancel_drains_offline_queue_without_send() {
+    fn offline_help_cancel_forwards_to_frontend_to_drain_local_queue() {
+        // The frontend WS client holds the authoritative offline
+        // queue, so even an offline-only cancel must emit to it —
+        // otherwise a stale HELP_REQUEST will flush to the server on
+        // reconnect after the user cancelled.
         let spy = Spy::new();
         let state = state_with(&spy);
         state.help_request();
         assert!(matches!(state.help_cancel(), HelpCancelStatus::Cancelled));
         assert_eq!(
             spy.help_cancels.load(Ordering::SeqCst),
-            0,
-            "offline-only cancel never hits the wire"
+            1,
+            "frontend must be told to drop its locally-queued request",
         );
-        assert!(!state.snapshot().help_pending);
+        let snap = state.snapshot();
+        assert!(!snap.help_pending);
     }
 
     #[test]
