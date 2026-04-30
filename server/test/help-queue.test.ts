@@ -61,4 +61,11 @@ describe('help-queue state machine (§7)', () => {
     assert.equal(r.changed, true);
     assert.equal(r.queue.entries.length, 0);
   });
+
+  it('helpAck waitMs uses the injected `now` for deterministic audit logging', () => {
+    const q = helpRequest(initialHelpQueue('room-1'), 'alice', null, 1000).queue;
+    const r = helpAck(q, 'alice', q.version, /* now */ 4500);
+    assert.equal(r.changed, true);
+    assert.equal(r.waitMs, 3500);
+  });
 });

@@ -176,11 +176,12 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
         sendError(socket, 'BAD_FRAME', 'missing contestantId');
         return;
       }
-      const res = helpAck(ctx.room.helpQueue, contestantId, expectedVersion);
+      const now = Date.now();
+      const res = helpAck(ctx.room.helpQueue, contestantId, expectedVersion, now);
       if (!res.changed) return;
 
       ctx.room.helpQueue = res.queue;
-      ctx.room.judgeAckedAt.set(ctx.identity.sub, Date.now());
+      ctx.room.judgeAckedAt.set(ctx.identity.sub, now);
 
       const notifyJob = ctx.room.notifyJobs.get(contestantId);
       if (notifyJob) {

@@ -75,6 +75,7 @@ export function helpAck(
   queue: HelpQueue,
   contestantId: string,
   expectedVersion: number,
+  now: number = Date.now(),
 ): { queue: HelpQueue; changed: boolean; waitMs: number | null } {
   if (expectedVersion !== queue.version) {
     return { queue, changed: false, waitMs: null };
@@ -83,7 +84,7 @@ export function helpAck(
   if (!match) {
     return { queue, changed: false, waitMs: null };
   }
-  const waitMs = Date.now() - match.requestedAtServerMs;
+  const waitMs = now - match.requestedAtServerMs;
   const entries = queue.entries.filter((e) => e.contestantId !== contestantId);
   return {
     queue: {
