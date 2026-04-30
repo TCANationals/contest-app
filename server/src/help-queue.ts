@@ -1,4 +1,4 @@
-// Help-queue state machine (§7). Stubbed; business logic to be filled in.
+// Help-queue state machine (§7).
 
 export interface HelpQueueEntry {
   contestantId: string;
@@ -16,28 +16,86 @@ export function initialHelpQueue(room: string): HelpQueue {
   return { room, version: 0, entries: [] };
 }
 
-// TODO: idempotent add (no-op if already queued) per §7.1.
+/**
+ * Add a contestant to the queue. Idempotent: if the contestant is already
+ * queued, returns the same queue object with no version bump.
+ */
 export function helpRequest(
-  _queue: HelpQueue,
-  _contestantId: string,
-  _now: number = Date.now(),
-): HelpQueue {
-  throw new Error('helpRequest: not implemented');
+  queue: HelpQueue,
+  contestantId: string,
+  stationNumber: number | null,
+  now: number = Date.now(),
+): { queue: HelpQueue; changed: boolean } {
+  if (queue.entries.some((e) => e.contestantId === contestantId)) {
+    return { queue, changed: false };
+  }
+  const entry: HelpQueueEntry = {
+    contestantId,
+    stationNumber,
+    requestedAtServerMs: now,
+  };
+  const entries = [...queue.entries, entry];
+  entries.sort((a, b) => a.requestedAtServerMs - b.requestedAtServerMs);
+  return {
+    queue: {
+      room: queue.room,
+      version: queue.version + 1,
+      entries,
+    },
+    changed: true,
+  };
 }
 
-// TODO: idempotent remove per §7.1.
+/**
+ * Remove a contestant from the queue. Idempotent: no-op if not queued.
+ */
 export function helpCancel(
-  _queue: HelpQueue,
-  _contestantId: string,
-): HelpQueue {
-  throw new Error('helpCancel: not implemented');
+  queue: HelpQueue,
+  contestantId: string,
+): { queue: HelpQueue; changed: boolean } {
+  const next = queue.entries.filter((e) => e.contestantId !== contestantId);
+  if (next.length === queue.entries.length) {
+    return { queue, changed: false };
+  }
+  return {
+    queue: {
+      room: queue.room,
+      version: queue.version + 1,
+      entries: next,
+    },
+    changed: true,
+  };
 }
 
-// TODO: first-judge-wins via version check per §7.2.
+/**
+ * Judge acknowledges a contestant's request. First-judge-wins via version
+ * check: if the expected version does not match, the ack is a no-op.
+ */
 export function helpAck(
-  _queue: HelpQueue,
-  _contestantId: string,
-  _expectedVersion: number,
-): HelpQueue {
-  throw new Error('helpAck: not implemented');
+  queue: HelpQueue,
+  contestantId: string,
+  expectedVersion: number,
+): { queue: HelpQueue; changed: boolean; waitMs: number | null } {
+  if (expectedVersion !== queue.version) {
+    return { queue, changed: false, waitMs: null };
+  }
+  const match = queue.entries.find((e) => e.contestantId === contestantId);
+  if (!match) {
+    return { queue, changed: false, waitMs: null };
+  }
+  const waitMs = Date.now() - match.requestedAtServerMs;
+  const entries = queue.entries.filter((e) => e.contestantId !== contestantId);
+  return {
+    queue: {
+      room: queue.room,
+      version: queue.version + 1,
+      entries,
+    },
+    changed: true,
+    waitMs,
+  };
+}
+
+export function isInQueue(queue: HelpQueue, contestantId: string): boolean {
+  return queue.entries.some((e) => e.contestantId === contestantId);
 }
