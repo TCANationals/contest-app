@@ -150,6 +150,126 @@ describe('WsClient', () => {
     c.stop();
   });
 
+  // Runtime validation of inbound frames via the shared zod contract
+  // (`ContestantInboundFrameSchema`). These tests lock in the rejection
+  // behavior so a future schema change or a misbehaving server can't
+  // silently corrupt the overlay. For each case the client MUST NOT
+  // invoke `onState`/`onOffset`, and MUST emit a single `console.warn`
+  // describing the rejection so the bug is visible from the debug log
+  // without crashing the overlay.
+  describe('rejects malformed frames', () => {
+    // Helper: drive one bad frame through the client and assert the
+    // contract — no state callback, no offset callback, one warn call.
+    const runMalformed = (payload: unknown) => {
+      const states: TimerState[] = [];
+      const offsets: number[] = [];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const c = new WsClient({
+        url: 'wss://h',
+        onState: (s) => states.push(s),
+        onStatus: () => undefined,
+        onOffset: (o) => offsets.push(o),
+        WebSocketImpl: asWSImpl(),
+      });
+      c.start();
+      const ws = FakeWebSocket.instances[0]!;
+      ws.simulateOpen();
+      // Drain the warm-up PING send.
+      ws.sent.length = 0;
+
+      ws.simulateMessage(
+        typeof payload === 'string' ? payload : JSON.stringify(payload),
+      );
+
+      expect(states).toHaveLength(0);
+      expect(offsets).toHaveLength(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+      // The first warn argument is our prefix; the rest is the issues
+      // list. Assert both to catch a future regression where we stop
+      // prefixing warnings or lose the issues for debugging.
+      expect(warn.mock.calls[0]![0]).toBe('tca-timer: discarding malformed WS frame');
+
+      warn.mockRestore();
+      c.stop();
+    };
+
+    it('drops a frame with an unknown `type` discriminator', () => {
+      runMalformed({ type: 'NOT_A_FRAME', t0: 1, t1: 2, t2: 3 });
+    });
+
+    it('drops a frame missing the `type` discriminator', () => {
+      runMalformed({ t0: 1, t1: 2, t2: 3 });
+    });
+
+    it('drops a PONG frame with non-numeric timestamps', () => {
+      // This is the historical regression: the previous client coerced
+      // fields with `Number(...)` and would seed the offset tracker
+      // with NaN samples if the server misbehaved. The zod schema
+      // rejects strings up front.
+      runMalformed({ type: 'PONG', t0: '1', t1: '2', t2: '3' });
+    });
+
+    it('drops a STATE frame missing a required TimerState field', () => {
+      // Missing `status` — the overlay would otherwise forward a half-
+      // built TimerState into render state and freeze at "--:--".
+      runMalformed({
+        type: 'STATE',
+        room: 'r',
+        version: 1,
+        endsAtServerMs: null,
+        remainingMs: null,
+        message: '',
+        setBySub: 's',
+        setByEmail: 'e',
+        setAtServerMs: 0,
+      });
+    });
+
+    it('drops a STATE frame with a bad `status` enum value', () => {
+      runMalformed({
+        type: 'STATE',
+        room: 'r',
+        version: 1,
+        status: 'frozen', // not a TimerStatus
+        endsAtServerMs: null,
+        remainingMs: null,
+        message: '',
+        setBySub: 's',
+        setByEmail: 'e',
+        setAtServerMs: 0,
+      });
+    });
+
+    it('drops a payload that is valid JSON but not an object', () => {
+      // `[]` and primitives parse as JSON but can't match any of the
+      // discriminated-union branches. Exercising this prevents a
+      // regression where we accept `null`/`[]` and choke downstream.
+      runMalformed(JSON.stringify([]));
+    });
+
+    it('ignores non-string message payloads entirely (no warn)', () => {
+      // The overlay's WS client rejects non-string data *before*
+      // attempting to parse JSON — the browser WebSocket API never
+      // delivers a non-string here, but guard anyway. Because we never
+      // reach the zod parse, no warn is emitted.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const c = new WsClient({
+        url: 'wss://h',
+        onState: () => undefined,
+        onStatus: () => undefined,
+        onOffset: () => undefined,
+        WebSocketImpl: asWSImpl(),
+      });
+      c.start();
+      const ws = FakeWebSocket.instances[0]!;
+      ws.simulateOpen();
+      ws.simulateMessage(new ArrayBuffer(0));
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+      c.stop();
+    });
+  });
+
   it('clears stale offset samples when a new connection opens', () => {
     // §6.3: a reconnect must start with an empty offset window so a
     // server clock change between sessions doesn't leave corrupt

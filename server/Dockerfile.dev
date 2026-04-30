@@ -4,6 +4,13 @@
 # host source tree on top of /app at runtime so edits hot-reload via
 # `tsx watch`. NOT suitable for production; production uses Railway's
 # Nixpacks builder per `server/railway.json`.
+#
+# NOTE: this Dockerfile expects the build context to be the repo root
+# (see `docker-compose.yml`), not the `server/` directory. The server's
+# package.json declares `@tca-timer/shared` as `file:../shared`, and
+# `npm ci` resolves that link relative to the server's working
+# directory. Staging `shared/` at `/shared` before the install lets
+# the link succeed.
 
 FROM node:22-alpine
 
@@ -11,18 +18,26 @@ FROM node:22-alpine
 # convenience inside the container.
 RUN apk add --no-cache git bash
 
+# Stage the shared package at /shared so that `file:../shared` from
+# /app resolves correctly during `npm ci`. Only the files needed at
+# runtime are copied — `package.json` plus the TypeScript sources that
+# tsx will transpile on the fly.
+WORKDIR /shared
+COPY shared/package.json ./
+COPY shared/src ./src
+
 WORKDIR /app
 
 # Install deps in their own layer so subsequent rebuilds skip npm install
 # unless package.json or the lockfile change.
-COPY package.json package-lock.json ./
+COPY server/package.json server/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 # Copy the rest of the tree so the image is self-contained even before
 # the bind mount kicks in (e.g. for the one-shot `migrate` service).
 # At runtime the compose file mounts the host's `server/` over /app, so
 # this snapshot is mostly a fallback.
-COPY . .
+COPY server/. .
 
 EXPOSE 3000
 

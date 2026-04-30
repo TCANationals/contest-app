@@ -94,7 +94,7 @@ export class DemoJudgeSocket {
 
     const bump = () => {
       r.timer = { ...r.timer, version: r.timer.version + 1, setAtServerMs: Date.now() };
-      this.emit('message', JSON.stringify({ type: 'STATE', state: r.timer }));
+      this.emit('message', JSON.stringify({ type: 'STATE', ...r.timer }));
     };
 
     switch (frame.type) {
@@ -162,7 +162,7 @@ export class DemoJudgeSocket {
           version: r.help.version + 1,
           entries: r.help.entries.filter((e) => e.contestantId !== cid),
         };
-        this.emit('message', JSON.stringify({ type: 'HELP_QUEUE', queue: r.help }));
+        this.emit('message', JSON.stringify({ type: 'HELP_QUEUE', ...r.help }));
         break;
       }
     }
@@ -184,8 +184,8 @@ export class DemoJudgeSocket {
       return;
     }
     if (!this.pushedState) {
-      this.emit('message', JSON.stringify({ type: 'STATE', state: r.timer }));
-      this.emit('message', JSON.stringify({ type: 'HELP_QUEUE', queue: r.help }));
+      this.emit('message', JSON.stringify({ type: 'STATE', ...r.timer }));
+      this.emit('message', JSON.stringify({ type: 'HELP_QUEUE', ...r.help }));
       this.pushedState = true;
     }
     // Seed a help-request after 3s for UX preview.
@@ -204,7 +204,7 @@ export class DemoJudgeSocket {
           },
         ],
       };
-      this.emit('message', JSON.stringify({ type: 'HELP_QUEUE', queue: help.help }));
+      this.emit('message', JSON.stringify({ type: 'HELP_QUEUE', ...help.help }));
     }, 3000);
     this.unsubscribe = () => window.clearTimeout(id);
   }

@@ -11,6 +11,8 @@ import {
   broadcastHelpQueueToJudges,
   helpQueueFrame,
   stateFrame,
+  pongFrame,
+  errorFrame,
   safeSend,
   writeAudit,
   persistTimer,
@@ -130,7 +132,7 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
       const t0 = typeof msg.t0 === 'number' ? msg.t0 : 0;
       const t1 = Date.now();
       const t2 = Date.now();
-      safeSend(socket, JSON.stringify({ type: 'PONG', t0, t1, t2 }));
+      safeSend(socket, pongFrame(t0, t1, t2));
       return;
     }
 
@@ -275,7 +277,7 @@ function timerAuditPayload(
 }
 
 function sendError(socket: WebSocket, code: string, message: string): void {
-  safeSend(socket, JSON.stringify({ type: 'ERROR', code, message }));
+  safeSend(socket, errorFrame(code, message));
 }
 
 function closeWith(socket: WebSocket, code: number, reason: string): void {

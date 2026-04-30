@@ -5,6 +5,11 @@
 //   3) broadcast STATE / HELP_QUEUE (never await the DB write)
 
 import type { WebSocket } from 'ws';
+import {
+  JudgeInboundFrameSchema,
+  type JudgeInboundFrame,
+} from '@tca-timer/shared/api';
+
 import { initialHelpQueue, type HelpQueue, isInQueue } from './help-queue.js';
 import { initialTimerState, type TimerState } from './timer.js';
 import {
@@ -66,20 +71,70 @@ export function allRoomStates(): ReadonlyMap<string, RoomState> {
 // Broadcasts
 // ---------------------------------------------------------------------------
 
+/**
+ * In dev and test builds, parse every outbound frame against the
+ * §5.2 contract from `@tca-timer/shared/api` before it hits the
+ * wire. A failure here indicates drift between the server and the
+ * schema the SPA + contestant overlay parse with — we want those to
+ * show up as a loud thrown error during `npm test` rather than as a
+ * silent "undefined" reaching a client.
+ *
+ * Skipped in production (`NODE_ENV=production`) to keep the hot
+ * broadcast path allocation-free: the schemas allocate transient
+ * objects during parse, and broadcasts fire several times per second
+ * under load.
+ *
+ * The judge inbound schema is a superset of the contestant inbound
+ * schema (it adds `HELP_QUEUE`), so using it for *every* outbound
+ * frame validates both directions without needing to know which
+ * socket type the frame is destined for at construction time.
+ */
+function assertOutboundFrameContract(frame: JudgeInboundFrame): void {
+  if (process.env.NODE_ENV === 'production') return;
+  const result = JudgeInboundFrameSchema.safeParse(frame);
+  if (result.success) return;
+  const detail = result.error.issues
+    .slice(0, 3)
+    .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+    .join('; ');
+  throw new Error(`outbound WS frame violates §5.2 contract: ${detail}`);
+}
+
 export function stateFrame(state: TimerState, connectedContestants: number): string {
-  return JSON.stringify({
+  const frame: JudgeInboundFrame = {
     type: 'STATE',
     ...state,
     connectedContestants,
     dbDegraded: isDbDegraded(),
-  });
+  };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
 }
 
 export function helpQueueFrame(queue: HelpQueue): string {
-  return JSON.stringify({
-    type: 'HELP_QUEUE',
-    ...queue,
-  });
+  const frame: JudgeInboundFrame = { type: 'HELP_QUEUE', ...queue };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
+}
+
+/**
+ * Build a PONG frame string. Centralized here (alongside `stateFrame`
+ * and `helpQueueFrame`) so every frame the server emits on the wire
+ * flows through the same §5.2 contract check.
+ */
+export function pongFrame(t0: number, t1: number, t2: number): string {
+  const frame: JudgeInboundFrame = { type: 'PONG', t0, t1, t2 };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
+}
+
+/**
+ * Build an ERROR frame string. Same rationale as `pongFrame`.
+ */
+export function errorFrame(code: string, message: string): string {
+  const frame: JudgeInboundFrame = { type: 'ERROR', code, message };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
 }
 
 export function broadcastState(room: RoomState): void {

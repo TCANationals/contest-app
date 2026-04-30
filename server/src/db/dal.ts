@@ -306,12 +306,19 @@ async function _findJudgeByEmail(email: string): Promise<JudgePrefsRow | null> {
 // ---------------------------------------------------------------------------
 
 export interface AuditEvent {
+  /**
+   * `audit_log.id` (BIGSERIAL). Populated for rows returned by
+   * `queryAuditLog`. Optional because callers writing a new event via
+   * `insertAuditEvent` don't supply it — the column defaults to the
+   * sequence.
+   */
+  id?: number;
   room: string;
   atServerMs: number;
   actorSub: string;
   actorEmail: string | null;
   eventType: string;
-  payload: unknown;
+  payload: Record<string, unknown>;
 }
 
 async function _insertAuditEvent(ev: AuditEvent): Promise<void> {
@@ -353,7 +360,7 @@ async function _queryAuditLog(filter: AuditLogFilter): Promise<AuditEvent[]> {
   params.push(Math.min(filter.limit ?? 1000, 10_000));
   const limitPlaceholder = `$${params.length}`;
   const res = await pool.query(
-    `SELECT room, at_server_ms, actor_sub, actor_email, event_type, payload
+    `SELECT id, room, at_server_ms, actor_sub, actor_email, event_type, payload
        FROM audit_log
        ${where}
        ORDER BY at_server_ms DESC
@@ -361,6 +368,7 @@ async function _queryAuditLog(filter: AuditLogFilter): Promise<AuditEvent[]> {
     params,
   );
   return res.rows.map((r: {
+    id: string | number;
     room: string;
     at_server_ms: string | number;
     actor_sub: string;
@@ -368,12 +376,18 @@ async function _queryAuditLog(filter: AuditLogFilter): Promise<AuditEvent[]> {
     event_type: string;
     payload: unknown;
   }) => ({
+    // BIGSERIAL comes back as a string from `pg` by default; coerce to
+    // number for JSON-friendly output (audit ids fit in a JS number
+    // for any reasonable retention window).
+    id: Number(r.id),
     room: r.room,
     atServerMs: Number(r.at_server_ms),
     actorSub: r.actor_sub,
     actorEmail: r.actor_email,
     eventType: r.event_type,
-    payload: r.payload,
+    // The column is `JSONB NOT NULL DEFAULT '{}'` and we always insert
+    // an object via `insertAuditEvent`, so this assertion is safe.
+    payload: (r.payload ?? {}) as Record<string, unknown>,
   }));
 }
 

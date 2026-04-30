@@ -57,8 +57,10 @@ services:
   # `docker compose up` does not race the schema vs. the application.
   migrate:
     build:
-      context: ./server
-      dockerfile: Dockerfile.dev
+      # Build context is the repo root so `file:../shared` resolves at
+      # `npm ci` time. See `server/Dockerfile.dev` for the rationale.
+      context: .
+      dockerfile: server/Dockerfile.dev
     depends_on:
       db:
         condition: service_healthy
@@ -67,26 +69,60 @@ services:
     command: ["npm", "run", "migrate"]
     volumes:
       - ./server:/app:rw
+      - ./shared:/shared:rw
+      - server_node_modules:/app/node_modules
+    restart: "no"
+
+  # One-shot service: idempotently inserts a single well-known room
+  # (`id=dev`, `roomToken=dev-room-token`) so the desktop overlay can
+  # connect immediately on a fresh `docker compose up` without manual
+  # admin-API setup. The script hard-refuses to run when
+  # `NODE_ENV=production`. See `server/src/db/seed-dev.ts` for the
+  # full plain-text contract — it is intentionally non-secret and
+  # documented in the repo `README.md`.
+  seed-dev:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.dev
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://tca_timer:tca_timer_dev@db:5432/tca_timer
+      NODE_ENV: development
+    command: ["npm", "run", "seed:dev"]
+    volumes:
+      - ./server:/app:rw
+      - ./shared:/shared:rw
       - server_node_modules:/app/node_modules
     restart: "no"
 
   server:
     build:
-      context: ./server
-      dockerfile: Dockerfile.dev
+      # Build context is the repo root so the image can pull in both
+      # `server/` and the `shared/` workspace that the server depends
+      # on via `file:../shared` in its package.json.
+      context: .
+      dockerfile: server/Dockerfile.dev
     depends_on:
       db:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      seed-dev:
+        condition: service_completed_successfully
     environment:
       PORT: "3000"
       DATABASE_URL: postgres://tca_timer:tca_timer_dev@db:5432/tca_timer
-      # Local dev defaults: run without Cloudflare Access JWT
-      # verification (the /api/judge and /api/admin routes will return
-      # 401 missing_jwt as documented). To exercise those routes,
-      # populate these via a `.env` file at the repo root or via
-      # `docker compose run --rm -e CF_ACCESS_AUD=… server`.
+      # Local dev: run without Cloudflare Access JWT verification. The
+      # `DEV_AUTH_BYPASS` flag (handled in `server/src/auth/cf-jwt.ts`)
+      # makes every `/api/judge/*` and `/api/admin/*` request resolve
+      # to a synthetic admin identity so the SPA is usable end to end.
+      # The flag is hard-disabled when NODE_ENV=production. To exercise
+      # the real CF Access path, unset DEV_AUTH_BYPASS and populate
+      # CF_ACCESS_* (via a repo-root `.env` or
+      # `docker compose run --rm -e CF_ACCESS_AUD=… server`).
+      DEV_AUTH_BYPASS: "1"
       CF_ACCESS_AUD: ""
       CF_ACCESS_ISSUER: ""
       CF_ACCESS_JWKS_URL: ""
@@ -96,6 +132,12 @@ services:
       - "3000:3000"
     volumes:
       - ./server:/app:rw
+      # Mirror what the SPA does: the server's
+      # `node_modules/@tca-timer/shared` is a symlink that resolves to
+      # `/shared` inside the container, so bind-mount the host's
+      # `shared/` source tree there to get tsx-watch reloads when
+      # shared-package files change.
+      - ./shared:/shared:rw
       # Anonymous volume on top of /app/node_modules so the bind-mount
       # above doesn't clobber the linux-x64 node_modules built inside
       # the container with whatever the host (potentially macOS or
@@ -111,20 +153,32 @@ services:
 
   spa:
     build:
-      context: ./spa
-      dockerfile: Dockerfile.dev
+      # Build context is the repo root so the image can pull in both
+      # `spa/` and the `shared/` workspace that the SPA depends on via
+      # `file:../shared` in its package.json.
+      context: .
+      dockerfile: spa/Dockerfile.dev
     depends_on:
       server:
         condition: service_started
     environment:
-      # Vite reads these at dev-server boot so the SPA points at the
-      # compose-managed server. Override per developer if needed.
-      VITE_API_BASE: "http://localhost:3000"
-      VITE_WS_BASE: "ws://localhost:3000"
+      # Vite reads this at dev-server boot to set up the dev-time proxy
+      # (see `spa/vite.config.ts`). The SPA itself uses relative URLs
+      # for both REST and WebSocket calls, matching how it's served
+      # behind Cloudflare in prod, and Vite forwards `/api`, `/judge`,
+      # and `/contestant` to the Fastify backend at this target. From
+      # inside the compose network the server is reachable as
+      # `http://server:3000`; override for other setups.
+      VITE_API_PROXY: "http://server:3000"
     ports:
       - "5173:5173"
     volumes:
       - ./spa:/app:rw
+      # The SPA's `node_modules/@tca-timer/shared` is a symlink that
+      # resolves to `/shared` inside the container, so bind-mount the
+      # host's `shared/` source tree there to get HMR on shared-package
+      # edits as well.
+      - ./shared:/shared:rw
       - spa_node_modules:/app/node_modules
 
 volumes:

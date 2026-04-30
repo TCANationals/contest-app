@@ -3,12 +3,23 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 
+import type {
+  AuditLogEntry,
+  WirePrefs,
+  WireRoom,
+  WireTicket,
+  WireVerifyEmail,
+  WireVerifyPhone,
+} from '@tca-timer/shared/api';
+
 import {
   verifyCfAccessJwt,
   ticketCache,
   judgeRoomAccess,
   hasRoomAccess,
   loadCfJwtConfig,
+  isDevAuthBypassEnabled,
+  devAuthBypassIdentity,
   type JudgeIdentity,
 } from '../auth/cf-jwt.js';
 import {
@@ -32,6 +43,14 @@ async function requireJudge(
   reply: FastifyReply,
 ): Promise<JudgeIdentity | null> {
   if (req.judgeIdentity) return req.judgeIdentity;
+
+  // Dev-only escape hatch (see `auth/cf-jwt.ts`). Disabled when
+  // NODE_ENV=production so a misconfigured prod env can't drop auth.
+  if (isDevAuthBypassEnabled()) {
+    const id = devAuthBypassIdentity();
+    req.judgeIdentity = id;
+    return id;
+  }
 
   const headerJwt =
     (req.headers['cf-access-jwt-assertion'] as string | undefined) ??
@@ -60,7 +79,8 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
     const id = await requireJudge(req, reply);
     if (!id) return;
     const ticket = ticketCache.mint(id);
-    return { ticket, expiresInMs: 30_000 };
+    const out: WireTicket = { ticket, expiresInMs: 30_000 };
+    return out;
   });
 
   app.get('/api/judge/rooms', async (req, reply) => {
@@ -69,13 +89,14 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
     const all = await listActiveRooms();
     const access = judgeRoomAccess(id.groups);
     const visible = access === 'all' ? all : all.filter((r) => access.includes(r.id));
-    return {
-      rooms: visible.map((r) => ({
-        id: r.id,
-        display_label: r.display_label,
-        created_at: r.created_at,
-      })),
-    };
+    const rooms: WireRoom[] = visible.map((r) => ({
+      id: r.id,
+      display_label: r.display_label,
+      // `created_at` is a Date in the row; serialize to an ISO string
+      // so the wire shape is stable JSON.
+      created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+    }));
+    return { rooms };
   });
 
   app.get('/api/judge/log', async (req, reply) => {
@@ -94,7 +115,12 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
     const since = q.since ? Number(q.since) : undefined;
     const limit = q.limit ? Math.min(Number(q.limit), 10_000) : 1000;
     const rows = await queryAuditLog({ room, since, limit });
-    return { entries: rows };
+    // The DAL types `id` as optional (it's only populated on read, not
+    // on insert). Every row coming out of `queryAuditLog` does carry
+    // an id from the `BIGSERIAL` column, so the cast is a contract
+    // narrowing — the wire schema requires `id`.
+    const entries = rows as AuditLogEntry[];
+    return { entries };
   });
 
   app.get('/api/judge/log.csv', async (req, reply) => {
@@ -246,7 +272,8 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'bad_code' });
     }
     await setPhoneStatus(id.sub, 'verified');
-    return { phoneStatus: 'verified' };
+    const out: WireVerifyPhone = { phoneStatus: 'verified' };
+    return out;
   });
 
   app.post('/api/judge/prefs/verify-email', async (req, reply) => {
@@ -265,7 +292,8 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'bad_code' });
     }
     await setEmailStatus(id.sub, 'verified');
-    return { emailStatus: 'verified' };
+    const out: WireVerifyEmail = { emailStatus: 'verified' };
+    return out;
   });
 
   // Diagnostic / health info about CF Access configuration.
@@ -276,7 +304,13 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
   });
 
   app.addHook('onReady', async () => {
-    if (!loadCfJwtConfig()) {
+    if (isDevAuthBypassEnabled()) {
+      const id = devAuthBypassIdentity();
+      app.log.warn(
+        { sub: id.sub, email: id.email, groups: id.groups },
+        'DEV_AUTH_BYPASS active — JWT verification disabled, all requests run as the synthetic dev judge. Never enable in production.',
+      );
+    } else if (!loadCfJwtConfig()) {
       app.log.warn('CF Access config not set; /api/judge/* will reject all requests');
     }
   });
@@ -285,7 +319,10 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
   void insertAuditEvent;
 }
 
-function prefsToWire(row: JudgePrefsRow | null, id: JudgeIdentity) {
+// Annotated with the shared `WirePrefs` so any drift between the
+// server's response and the contract in `@tca-timer/shared/api` (which
+// the SPA also consumes) becomes a TypeScript error here.
+function prefsToWire(row: JudgePrefsRow | null, id: JudgeIdentity): WirePrefs {
   if (!row) {
     return {
       sub: id.sub,
