@@ -130,43 +130,17 @@ async function sendSmsWithRetry(
   room: string,
   payload: { to: string; body: string },
 ): Promise<void> {
-  try {
-    const res = await sendSms(payload);
-    await safeAudit({
-      room,
-      atServerMs: Date.now(),
-      actorSub: 'system',
-      actorEmail: null,
-      eventType: 'SMS_SENT',
-      payload: { judgeSub: j.sub, twilioSid: res.sid },
-    });
-    return;
-  } catch (err) {
-    await sleep(RETRY_DELAY_MS);
-    try {
-      const res = await sendSms(payload);
-      await safeAudit({
-        room,
-        atServerMs: Date.now(),
-        actorSub: 'system',
-        actorEmail: null,
-        eventType: 'SMS_SENT',
-        payload: { judgeSub: j.sub, twilioSid: res.sid, retried: true },
-      });
-    } catch (err2) {
-      await safeAudit({
-        room,
-        atServerMs: Date.now(),
-        actorSub: 'system',
-        actorEmail: null,
-        eventType: 'SMS_FAILED',
-        payload: {
-          judgeSub: j.sub,
-          errorCode: (err2 as { code?: string })?.code ?? (err as { code?: string })?.code ?? 'unknown',
-        },
-      });
-    }
-  }
+  await sendWithRetry({
+    send: () => sendSms(payload),
+    successEvent: 'SMS_SENT',
+    failureEvent: 'SMS_FAILED',
+    successPayload: (res) => ({ judgeSub: j.sub, twilioSid: res.sid }),
+    failurePayload: (err) => ({
+      judgeSub: j.sub,
+      errorCode: (err as { code?: string })?.code ?? 'unknown',
+    }),
+    room,
+  });
 }
 
 async function sendEmailWithRetry(
@@ -174,40 +148,64 @@ async function sendEmailWithRetry(
   room: string,
   payload: { to: string; subject: string; body: string },
 ): Promise<void> {
+  await sendWithRetry({
+    send: () => sendEmail(payload),
+    successEvent: 'EMAIL_SENT',
+    failureEvent: 'EMAIL_FAILED',
+    successPayload: (res) => ({ judgeSub: j.sub, sesMessageId: res.messageId }),
+    failurePayload: (err) => ({
+      judgeSub: j.sub,
+      errorCode: (err as { name?: string })?.name ?? 'unknown',
+    }),
+    room,
+  });
+}
+
+interface RetryParams<R> {
+  send: () => Promise<R>;
+  successEvent: string;
+  failureEvent: string;
+  successPayload: (result: R) => Record<string, unknown>;
+  failurePayload: (err: unknown) => Record<string, unknown>;
+  room: string;
+}
+
+/**
+ * try → sleep → retry-once → audit. Shared between SMS and email so both
+ * adapters stay in lockstep on retry semantics.
+ */
+async function sendWithRetry<R>(params: RetryParams<R>): Promise<void> {
   try {
-    const res = await sendEmail(payload);
+    const res = await params.send();
     await safeAudit({
-      room,
+      room: params.room,
       atServerMs: Date.now(),
       actorSub: 'system',
       actorEmail: null,
-      eventType: 'EMAIL_SENT',
-      payload: { judgeSub: j.sub, sesMessageId: res.messageId },
+      eventType: params.successEvent,
+      payload: params.successPayload(res),
     });
     return;
-  } catch (err) {
+  } catch (firstErr) {
     await sleep(RETRY_DELAY_MS);
     try {
-      const res = await sendEmail(payload);
+      const res = await params.send();
       await safeAudit({
-        room,
+        room: params.room,
         atServerMs: Date.now(),
         actorSub: 'system',
         actorEmail: null,
-        eventType: 'EMAIL_SENT',
-        payload: { judgeSub: j.sub, sesMessageId: res.messageId, retried: true },
+        eventType: params.successEvent,
+        payload: { ...params.successPayload(res), retried: true },
       });
-    } catch (err2) {
+    } catch (secondErr) {
       await safeAudit({
-        room,
+        room: params.room,
         atServerMs: Date.now(),
         actorSub: 'system',
         actorEmail: null,
-        eventType: 'EMAIL_FAILED',
-        payload: {
-          judgeSub: j.sub,
-          errorCode: (err2 as { name?: string })?.name ?? (err as { name?: string })?.name ?? 'unknown',
-        },
+        eventType: params.failureEvent,
+        payload: params.failurePayload(secondErr ?? firstErr),
       });
     }
   }
