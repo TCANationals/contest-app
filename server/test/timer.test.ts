@@ -123,4 +123,30 @@ describe('timer state machine (§6.5)', () => {
       TimerTransitionError,
     );
   });
+
+  it('MESSAGE_SET updates message without disturbing timer state', () => {
+    // Running timer: MESSAGE_SET preserves status/endsAt and bumps version.
+    const running = at(1000, { status: 'running', endsAtServerMs: 10_000, message: 'old' });
+    const next = applyTimerCommand(running, { type: 'MESSAGE_SET', message: 'Round 2' }, JUDGE, 5000);
+    assert.equal(next.status, 'running');
+    assert.equal(next.endsAtServerMs, 10_000);
+    assert.equal(next.remainingMs, null);
+    assert.equal(next.message, 'Round 2');
+    assert.equal(next.version, running.version + 1);
+  });
+
+  it('MESSAGE_SET with empty string clears the banner from idle', () => {
+    const s = at(1000, { status: 'idle', message: 'go' });
+    const next = applyTimerCommand(s, { type: 'MESSAGE_SET', message: '' }, JUDGE, 2000);
+    assert.equal(next.status, 'idle');
+    assert.equal(next.message, '');
+  });
+
+  it('MESSAGE_SET preserves paused remainingMs', () => {
+    const s = at(1000, { status: 'paused', remainingMs: 7000, message: '' });
+    const next = applyTimerCommand(s, { type: 'MESSAGE_SET', message: 'Heads up' }, JUDGE, 5000);
+    assert.equal(next.status, 'paused');
+    assert.equal(next.remainingMs, 7000);
+    assert.equal(next.message, 'Heads up');
+  });
 });

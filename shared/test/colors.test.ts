@@ -43,15 +43,27 @@ describe('countdownStyle', () => {
     expect(s.pulse).toBe(true);
   });
 
-  it('remains red-pulsing at 0', () => {
+  it('stays red but stops pulsing once the countdown hits zero', () => {
     const s = countdownStyle('running', 0);
+    expect(s.color).toBe('#DC2626');
+    expect(s.pulse).toBe(false);
+  });
+
+  it('does not pulse below zero either (overshoot guard)', () => {
+    const s = countdownStyle('running', -250);
+    expect(s.color).toBe('#DC2626');
+    expect(s.pulse).toBe(false);
+  });
+
+  it('still pulses just above zero', () => {
+    const s = countdownStyle('running', 1);
     expect(s.color).toBe('#DC2626');
     expect(s.pulse).toBe(true);
   });
 
-  it('treats null remainingMs as 0 when running (defensive)', () => {
+  it('treats null remainingMs as 0 when running (no pulse, defensive)', () => {
     const s = countdownStyle('running', null);
     expect(s.color).toBe('#DC2626');
-    expect(s.pulse).toBe(true);
+    expect(s.pulse).toBe(false);
   });
 });

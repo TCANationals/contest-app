@@ -155,6 +155,12 @@ export class DemoJudgeSocket {
         bump();
         break;
       }
+      case 'MESSAGE_SET': {
+        const message = typeof frame.message === 'string' ? frame.message : '';
+        r.timer = { ...r.timer, message };
+        bump();
+        break;
+      }
       case 'HELP_ACK': {
         const cid = String(frame.contestantId ?? '');
         r.help = {

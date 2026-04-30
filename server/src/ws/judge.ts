@@ -141,7 +141,8 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
     case 'TIMER_PAUSE':
     case 'TIMER_RESUME':
     case 'TIMER_ADJUST':
-    case 'TIMER_RESET': {
+    case 'TIMER_RESET':
+    case 'MESSAGE_SET': {
       const cmd = parseTimerCmd(type, msg);
       if (!cmd) {
         sendError(socket, 'BAD_FRAME', 'invalid timer command');
@@ -236,6 +237,7 @@ function limitKeyFor(type: string): LimitKey | null {
     case 'TIMER_RESUME':
     case 'TIMER_ADJUST':
     case 'TIMER_RESET':
+    case 'MESSAGE_SET':
       return 'TIMER';
     default:
       return null;
@@ -260,6 +262,11 @@ function parseTimerCmd(type: string, msg: { [k: string]: unknown }): TimerComman
       return { type: 'TIMER_ADJUST', deltaMs: delta };
     }
     case 'TIMER_RESET': return { type: 'TIMER_RESET' };
+    case 'MESSAGE_SET': {
+      const message = msg.message;
+      if (typeof message !== 'string') return null;
+      return { type: 'MESSAGE_SET', message };
+    }
     default: return null;
   }
 }
@@ -284,6 +291,8 @@ function timerAuditPayload(
       };
     case 'TIMER_RESET':
       return {};
+    case 'MESSAGE_SET':
+      return { message: cmd.message };
   }
 }
 

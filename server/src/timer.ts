@@ -33,7 +33,8 @@ export type TimerCommand =
   | { type: 'TIMER_PAUSE' }
   | { type: 'TIMER_RESUME' }
   | { type: 'TIMER_ADJUST'; deltaMs: number }
-  | { type: 'TIMER_RESET' };
+  | { type: 'TIMER_RESET' }
+  | { type: 'MESSAGE_SET'; message: string };
 
 export class TimerTransitionError extends Error {
   constructor(
@@ -139,6 +140,15 @@ export function applyTimerCommand(
         endsAtServerMs: null,
         remainingMs: null,
       };
+    }
+
+    case 'MESSAGE_SET': {
+      // Banner message is independent of the timer state machine: it
+      // can be set or cleared without disturbing status/endsAt/remaining.
+      if (typeof cmd.message !== 'string') {
+        throw new TimerTransitionError('BAD_MESSAGE', 'message must be a string');
+      }
+      return { ...base, message: cmd.message };
     }
   }
 }

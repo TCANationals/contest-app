@@ -13,8 +13,7 @@ export function TimerPage() {
   const timer = useAppStore((s) => s.timer);
   const remainingMs = useRemainingMs();
   const [duration, setDuration] = useState({ mm: '30', ss: '00' });
-  const [message, setMessage] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [messageDraft, setMessageDraft] = useState('');
   // Spec §10.4: a 30 s "undo" affordance after a fresh set. The undo simply
   // resets the timer back to idle — capturing prior status/endsAt/remaining
   // would only be useful if we restored the previous state, which would
@@ -26,7 +25,6 @@ export function TimerPage() {
   const undoTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    // Clear stale undo banners when room changes.
     setUndoPayload(null);
     if (undoTimer.current) window.clearTimeout(undoTimer.current);
   }, [room]);
@@ -39,12 +37,7 @@ export function TimerPage() {
     const durationMs = (mm * 60 + ss) * 1000;
     if (durationMs <= 0) return;
 
-    const payload: { type: 'TIMER_SET'; durationMs: number; message?: string } = {
-      type: 'TIMER_SET',
-      durationMs,
-    };
-    if (message) payload.message = message;
-    if (!sendFrame(payload)) return;
+    if (!sendFrame({ type: 'TIMER_SET', durationMs })) return;
 
     setUndoPayload({ expires: Date.now() + 30_000 });
     if (undoTimer.current) window.clearTimeout(undoTimer.current);
@@ -57,12 +50,21 @@ export function TimerPage() {
   const onAdjust = (minutes: number) =>
     sendFrame({ type: 'TIMER_ADJUST', deltaMs: minutes * 60_000 });
 
+  const onSetMessage = () => {
+    sendFrame({ type: 'MESSAGE_SET', message: messageDraft });
+  };
+  const onClearMessage = () => {
+    setMessageDraft('');
+    sendFrame({ type: 'MESSAGE_SET', message: '' });
+  };
+
   const onUndo = () => {
     sendFrame({ type: 'TIMER_RESET' });
     setUndoPayload(null);
   };
 
   const connectedCount = timer?.connectedContestants ?? null;
+  const liveMessage = timer?.message ?? '';
 
   return (
     <section className="space-y-6">
@@ -94,11 +96,49 @@ export function TimerPage() {
             Paused
           </span>
         )}
-        {timer?.message && (
+        {liveMessage && (
           <p className="text-slate-600 text-sm italic max-w-sm text-center">
-            {timer.message}
+            {liveMessage}
           </p>
         )}
+      </div>
+
+      {/* Duration input + Set & Start */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4">
+        <div className="grid gap-3 sm:grid-cols-[auto_auto_1fr]">
+          <label className="flex flex-col text-sm">
+            <span className="text-slate-500">Minutes</span>
+            <input
+              type="number"
+              value={duration.mm}
+              onChange={(e) => setDuration((d) => ({ ...d, mm: e.target.value }))}
+              min="0"
+              inputMode="numeric"
+              className="mt-1 px-2 py-2 border border-slate-300 rounded w-24"
+            />
+          </label>
+          <label className="flex flex-col text-sm">
+            <span className="text-slate-500">Seconds</span>
+            <input
+              type="number"
+              value={duration.ss}
+              onChange={(e) => setDuration((d) => ({ ...d, ss: e.target.value }))}
+              min="0"
+              max="59"
+              inputMode="numeric"
+              className="mt-1 px-2 py-2 border border-slate-300 rounded w-24"
+            />
+          </label>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={onStart}
+              className="bg-slate-900 text-white py-2 px-4 rounded font-medium w-full sm:w-auto"
+            >
+              Set &amp; Start
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Adjust grid: 2×2 on mobile, inline row on desktop. */}
@@ -146,57 +186,49 @@ export function TimerPage() {
 
       {undoPayload && <UndoBanner onUndo={onUndo} expires={undoPayload.expires} />}
 
-      <details
-        open={showAdvanced}
-        onToggle={(e) => setShowAdvanced((e.target as HTMLDetailsElement).open)}
-        className="bg-white rounded-xl border border-slate-200 p-4"
-      >
-        <summary className="cursor-pointer font-medium">Advanced</summary>
-        <div className="mt-3 grid gap-3 sm:grid-cols-[auto_auto_1fr_auto]">
-          <label className="flex flex-col text-sm">
-            <span className="text-slate-500">Minutes</span>
-            <input
-              type="number"
-              value={duration.mm}
-              onChange={(e) => setDuration((d) => ({ ...d, mm: e.target.value }))}
-              min="0"
-              inputMode="numeric"
-              className="mt-1 px-2 py-2 border border-slate-300 rounded w-24"
-            />
-          </label>
-          <label className="flex flex-col text-sm">
-            <span className="text-slate-500">Seconds</span>
-            <input
-              type="number"
-              value={duration.ss}
-              onChange={(e) => setDuration((d) => ({ ...d, ss: e.target.value }))}
-              min="0"
-              max="59"
-              inputMode="numeric"
-              className="mt-1 px-2 py-2 border border-slate-300 rounded w-24"
-            />
-          </label>
-          <label className="flex flex-col text-sm">
-            <span className="text-slate-500">Banner message (optional)</span>
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="e.g. Round 1"
-              className="mt-1 px-2 py-2 border border-slate-300 rounded"
-            />
-          </label>
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={onStart}
-              className="bg-slate-900 text-white py-2 px-4 rounded font-medium"
-            >
-              Set &amp; Start
-            </button>
-          </div>
+      {/* Banner message — independent of timer state. */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        <div>
+          <h2 className="font-medium text-slate-800">Banner message</h2>
+          <p className="text-xs text-slate-500">
+            Shown to contestants below the countdown. Independent of the
+            timer — set or clear without affecting the running timer.
+          </p>
         </div>
-      </details>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <input
+            type="text"
+            value={messageDraft}
+            onChange={(e) => setMessageDraft(e.target.value)}
+            placeholder={liveMessage || 'e.g. Round 1'}
+            className="px-2 py-2 border border-slate-300 rounded"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSetMessage();
+            }}
+          />
+          <button
+            type="button"
+            onClick={onSetMessage}
+            disabled={messageDraft.length === 0}
+            className="bg-slate-900 text-white py-2 px-4 rounded font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Set
+          </button>
+          <button
+            type="button"
+            onClick={onClearMessage}
+            disabled={liveMessage.length === 0 && messageDraft.length === 0}
+            className="bg-white border border-slate-300 py-2 px-4 rounded font-medium hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Clear
+          </button>
+        </div>
+        {liveMessage && (
+          <p className="text-xs text-slate-500">
+            Currently showing: <span className="italic">{liveMessage}</span>
+          </p>
+        )}
+      </div>
     </section>
   );
 }

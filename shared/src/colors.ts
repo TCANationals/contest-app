@@ -43,9 +43,10 @@ const PALETTE = {
  *
  *   1. `idle`      → idle gray on black, no pulse
  *   2. `paused`    → white on black, no pulse
- *   3. `running` with `remainingMs < 60_000`     → red on white, pulsing
- *   4. `running` with `remainingMs ≤ 5 × 60_000` → amber on dark navy
- *   5. `running` otherwise                        → green on black
+ *   3. `running` with `0 < remainingMs < 60_000` → red on white, pulsing
+ *   4. `running` with `remainingMs ≤ 0`          → red on white, no pulse
+ *   5. `running` with `remainingMs ≤ 5 × 60_000` → amber on dark navy
+ *   6. `running` otherwise                        → green on black
  */
 export function countdownStyle(
   status: TimerStatus,
@@ -59,7 +60,10 @@ export function countdownStyle(
   }
   const rem = remainingMs ?? 0;
   if (rem < 60_000) {
-    return { color: PALETTE.red, outline: PALETTE.white, pulse: true };
+    // Keep digits red but stop the pulse once the countdown reaches zero —
+    // a steady "00:00" reads as a settled finish state, while a continued
+    // pulse implies the timer is still ticking.
+    return { color: PALETTE.red, outline: PALETTE.white, pulse: rem > 0 };
   }
   if (rem <= 5 * 60_000) {
     return { color: PALETTE.amber, outline: PALETTE.darkNavy, pulse: false };

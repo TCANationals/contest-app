@@ -350,6 +350,7 @@ export const JudgeOutboundFrameSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('TIMER_RESUME') }),
   z.object({ type: z.literal('TIMER_ADJUST'), deltaMs: z.number() }),
   z.object({ type: z.literal('TIMER_RESET') }),
+  z.object({ type: z.literal('MESSAGE_SET'), message: z.string() }),
   z.object({
     type: z.literal('HELP_ACK'),
     contestantId: z.string(),
