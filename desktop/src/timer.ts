@@ -1,0 +1,62 @@
+// §6.3 / §6.5: render-side timer math. Pure functions so the full logic
+// is covered by vitest without needing a Tauri / WS harness.
+
+import type { TimerState } from './types';
+
+export function computeRemainingMs(
+  state: TimerState,
+  activeOffsetMs: number,
+  now: number = Date.now(),
+): number {
+  if (state.status === 'paused') return state.remainingMs ?? 0;
+  if (state.status === 'idle') return 0;
+  if (state.endsAtServerMs == null) return 0;
+  const serverNow = now + activeOffsetMs;
+  return Math.max(0, state.endsAtServerMs - serverNow);
+}
+
+export interface AlarmDecisionInput {
+  status: TimerState['status'];
+  remainingMs: number;
+  previousRemainingMs: number;
+  lastFiredAt: number | null;
+  now: number;
+  /** Alarm enabled toggle (§9.5.1). */
+  enabled: boolean;
+}
+
+/**
+ * §9.5.1 end-of-timer alarm gate. Returns `true` on the render tick where
+ * `running` remaining crosses into 0 for the first time, suppressing
+ * re-fires within 30s of the previous fire.
+ */
+export function shouldFireAlarm(input: AlarmDecisionInput): boolean {
+  if (!input.enabled) return false;
+  if (input.status !== 'running') return false;
+  if (input.remainingMs > 0) return false;
+  if (input.previousRemainingMs <= 0) return false;
+  if (
+    input.lastFiredAt != null &&
+    input.now - input.lastFiredAt < 30_000
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * §9.5.2 configurable flash. Flashes when running AND under the
+ * configured threshold. Flash state is independent of the color pulse
+ * that §9.2 specifies for sub-minute time.
+ */
+export function shouldFlash(
+  status: TimerState['status'],
+  remainingMs: number,
+  enabled: boolean,
+  thresholdMinutes: number,
+): boolean {
+  if (!enabled) return false;
+  if (status !== 'running') return false;
+  const thresholdMs = thresholdMinutes * 60_000;
+  return remainingMs <= thresholdMs;
+}

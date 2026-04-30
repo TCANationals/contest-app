@@ -1,19 +1,387 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { countdownStyle } from './colors';
 import { formatCountdown } from './format';
+import { computeRemainingMs, shouldFireAlarm, shouldFlash } from './timer';
+import type {
+  BootstrapPayload,
+  Preferences,
+  TimerState,
+} from './types';
+import { WsClient } from './ws-client';
+
+interface TauriWindow {
+  __TAURI_INTERNALS__?: unknown;
+  __TAURI__?: unknown;
+}
+
+async function tauriInvoke<T>(cmd: string, args?: unknown): Promise<T> {
+  const w = window as unknown as TauriWindow & {
+    __TAURI_INTERNALS__?: { invoke: (c: string, a?: unknown) => Promise<T> };
+  };
+  const internals = w.__TAURI_INTERNALS__;
+  if (internals && typeof (internals as { invoke?: unknown }).invoke === 'function') {
+    return (internals as { invoke: (c: string, a?: unknown) => Promise<T> }).invoke(
+      cmd,
+      args,
+    );
+  }
+  throw new Error('Tauri invoke bridge unavailable');
+}
+
+type UnlistenFn = () => void;
+
+async function tauriListen<T>(
+  event: string,
+  handler: (payload: T) => void,
+): Promise<UnlistenFn> {
+  const mod = (await import('@tauri-apps/api/event').catch(() => null)) as
+    | { listen: <P>(e: string, cb: (e: { payload: P }) => void) => Promise<UnlistenFn> }
+    | null;
+  if (!mod) return () => undefined;
+  return mod.listen<T>(event, (e) => handler(e.payload));
+}
+
+async function tauriEmit(event: string, payload: unknown): Promise<void> {
+  const mod = (await import('@tauri-apps/api/event').catch(() => null)) as
+    | { emit: (e: string, p: unknown) => Promise<void> }
+    | null;
+  if (!mod) return;
+  await mod.emit(event, payload);
+}
+
+interface OverlayState {
+  timer: TimerState;
+  offsetMs: number;
+  connected: boolean;
+  visible: boolean;
+  bootstrap: BootstrapPayload | null;
+  bootstrapError: string | null;
+}
+
+const IDLE_TIMER: TimerState = {
+  room: '',
+  version: 0,
+  status: 'idle',
+  endsAtServerMs: null,
+  remainingMs: null,
+  message: '',
+  setBySub: '',
+  setByEmail: '',
+  setAtServerMs: 0,
+};
 
 export function Overlay() {
-  // TODO(§9.2): render CountdownWithBorder, priority colors, paused pill.
+  const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [timer, setTimer] = useState<TimerState>(IDLE_TIMER);
+  const [offsetMs, setOffsetMs] = useState(0);
+  const [connected, setConnected] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const [displayMs, setDisplayMs] = useState<number | null>(null);
+  const [flashPhase, setFlashPhase] = useState(false);
+  const [pulsePhase, setPulsePhase] = useState(false);
+
+  const clientRef = useRef<WsClient | null>(null);
+  const prevRemRef = useRef<number>(Number.POSITIVE_INFINITY);
+  const lastAlarmRef = useRef<number | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    tauriInvoke<BootstrapPayload>('get_bootstrap')
+      .then((payload) => {
+        if (!cancelled) {
+          setBootstrap(payload);
+          setVisible(!payload.preferences.hidden);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setBootstrapError(
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisteners: UnlistenFn[] = [];
+    let disposed = false;
+    (async () => {
+      unlisteners.push(
+        await tauriListen<boolean>('overlay:set-visible', (v) => {
+          setVisible(v);
+        }),
+      );
+      unlisteners.push(
+        await tauriListen<void>('overlay:send-help-request', () => {
+          const client = clientRef.current;
+          if (client) client.sendHelpRequest();
+        }),
+      );
+      unlisteners.push(
+        await tauriListen<void>('overlay:send-help-cancel', () => {
+          const client = clientRef.current;
+          if (client) client.sendHelpCancel();
+        }),
+      );
+    })().catch(() => undefined);
+    return () => {
+      disposed = true;
+      for (const u of unlisteners) u();
+      void disposed;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!bootstrap || !bootstrap.config) return;
+    const url = buildContestantUrl(bootstrap);
+    const client = new WsClient({
+      url,
+      onState: (s) => setTimer(s),
+      onStatus: ({ connected: c }) => {
+        setConnected(c);
+        void tauriEmit('overlay:connection-changed', c);
+      },
+      onOffset: (o) => setOffsetMs(o),
+    });
+    clientRef.current = client;
+    client.start();
+    return () => {
+      client.stop();
+      clientRef.current = null;
+    };
+  }, [bootstrap]);
+
+  // 4 Hz render tick per §6.3.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const rem = computeRemainingMs(timer, offsetMs);
+      setDisplayMs(rem);
+
+      const now = Date.now();
+      if (
+        bootstrap?.preferences?.alarm &&
+        shouldFireAlarm({
+          status: timer.status,
+          remainingMs: rem,
+          previousRemainingMs: prevRemRef.current,
+          lastFiredAt: lastAlarmRef.current,
+          now,
+          enabled: bootstrap.preferences.alarm.enabled,
+        })
+      ) {
+        lastAlarmRef.current = now;
+        playAlarm(audioRef, bootstrap.preferences.alarm.volume);
+      }
+      prevRemRef.current = rem;
+    }, 250);
+    return () => clearInterval(id);
+  }, [timer, offsetMs, bootstrap]);
+
+  // 1 Hz flash + pulse phase for under-threshold flashing and sub-minute
+  // pulse (§9.2 / §9.5.2). Purely cosmetic; does not affect timekeeping.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setFlashPhase((x) => !x);
+      setPulsePhase((x) => !x);
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  const prefs: Preferences | undefined = bootstrap?.preferences;
+  const style = countdownStyle(timer.status, displayMs);
+  const isRunning = timer.status === 'running';
+  const rem = displayMs ?? 0;
+  const flashing = shouldFlash(
+    timer.status,
+    rem,
+    prefs?.flash.enabled ?? false,
+    prefs?.flash.thresholdMinutes ?? 2,
+  );
+
+  const opacity = connected ? 1 : 0.7;
+  const pulseOpacity = style.pulse && pulsePhase ? 0.55 : 1;
+  const flashOpacity = flashing && flashPhase ? 0 : 1;
+
+  if (!visible) {
+    return null;
+  }
+
+  if (bootstrapError) {
+    return (
+      <ConfigError message={`Bootstrap failed: ${bootstrapError}`} />
+    );
+  }
+
+  if (bootstrap?.configError) {
+    return (
+      <ConfigError
+        message={bootstrap.configError.message}
+        report={bootstrap.report.sources
+          .map(
+            (s) =>
+              `${s.source}: ${
+                s.found.length ? `found ${s.found.join(', ')}` : 'missing'
+              }${s.note ? ` (${s.note})` : ''}`,
+          )
+          .join('\n')}
+      />
+    );
+  }
+
+  const text =
+    timer.status === 'idle' || displayMs == null
+      ? '--:--'
+      : formatCountdown(displayMs);
+
   return (
     <div
+      data-testid="overlay"
       style={{
-        fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-        fontSize: '48px',
-        color: '#888',
-        WebkitTextStroke: '2px #000',
-        textAlign: 'center',
-        padding: '1rem',
+        opacity,
+        padding: '8px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%',
+        height: '100%',
+        boxSizing: 'border-box',
+        pointerEvents: 'none',
+        userSelect: 'none',
       }}
     >
-      {formatCountdown(null)}
+      <span
+        data-testid="countdown"
+        style={{
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          fontSize: '48px',
+          fontWeight: 700,
+          color: style.color,
+          WebkitTextStroke: `2px ${style.border}`,
+          opacity: pulseOpacity * flashOpacity,
+          transition: 'opacity 150ms linear',
+          lineHeight: 1,
+        }}
+      >
+        {text}
+      </span>
+      {timer.status === 'paused' && (
+        <span
+          data-testid="paused-pill"
+          style={{
+            marginTop: 4,
+            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: 1,
+            color: '#fff',
+            background: 'rgba(0,0,0,0.7)',
+            padding: '2px 8px',
+            borderRadius: 4,
+          }}
+        >
+          PAUSED
+        </span>
+      )}
+      {isRunning && timer.message && (
+        <span
+          style={{
+            marginTop: 4,
+            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+            fontSize: 11,
+            color: '#fff',
+            WebkitTextStroke: '1px #000',
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {timer.message}
+        </span>
+      )}
     </div>
   );
+}
+
+function ConfigError({
+  message,
+  report,
+}: {
+  message: string;
+  report?: string;
+}) {
+  return (
+    <div
+      data-testid="config-error"
+      style={{
+        padding: '8px 12px',
+        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        color: '#DC2626',
+        fontSize: 14,
+        fontWeight: 700,
+        lineHeight: 1.2,
+        textAlign: 'center',
+        pointerEvents: 'none',
+        userSelect: 'none',
+      }}
+    >
+      <div>{message}</div>
+      {report && (
+        <pre
+          style={{
+            marginTop: 4,
+            fontSize: 10,
+            color: '#fff',
+            whiteSpace: 'pre-wrap',
+            textAlign: 'left',
+          }}
+        >
+          {report}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function buildContestantUrl(b: BootstrapPayload): string {
+  const cfg = b.config!;
+  const q = new URLSearchParams({
+    room: cfg.room,
+    id: b.contestantId,
+    token: cfg.roomToken,
+  });
+  return `wss://${cfg.serverHost}/contestant?${q.toString()}`;
+}
+
+function playAlarm(
+  ref: React.MutableRefObject<HTMLAudioElement | null>,
+  volume: number,
+): void {
+  try {
+    if (!ref.current) {
+      ref.current = new Audio();
+    }
+    const a = ref.current;
+    a.volume = Math.max(0, Math.min(1, volume));
+    a.src = '/alarm.wav';
+    void a.play().catch(() => undefined);
+    // §9.5.1: cap playback at 4 s.
+    window.setTimeout(() => {
+      try {
+        a.pause();
+        a.currentTime = 0;
+      } catch {
+        // ignore
+      }
+    }, 4_000);
+  } catch {
+    // alarm failures must never crash the overlay
+  }
 }
