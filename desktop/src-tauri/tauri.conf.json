@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src wss://timer.example.com http://127.0.0.1:17380; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src wss://timer.example.com; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

@@ -37,4 +37,4 @@ npm run build
 | --------- | ---- | ---- | ----- |
 | server    | `tsc --noEmit` | `node --test` | Fastify app w/ `/healthz`, WS upgrade stubs, REST stubs, schema DDL, state/queue/notify placeholders. |
 | spa       | `tsc -b --noEmit` | `vitest` | React app w/ routing + pages, `computeRemainingMs` helper, PWA plugin, CountdownWithBorder stub. |
-| desktop   | `tsc -b --noEmit` | `vitest` | Vite+React overlay, Tauri 2 config, `ipc_server.rs` stub, `ctl/` companion crate. |
+| desktop   | `tsc -b --noEmit` | `vitest` + `cargo test` | Vite+React overlay, Tauri 2 config, OS-agnostic local-socket IPC (`ipc-proto` + `ipc-server` + `ctl`) with a real-socket loopback test. |

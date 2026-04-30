@@ -30,6 +30,21 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  rust-ipc:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      # Exercise the OS-agnostic IPC crates without pulling in Tauri's
+      # system dependencies (§9.6). The full Tauri build runs in `tauri-msi`.
+      - run: cargo test -p tca-timer-ipc-proto -p tca-timer-ipc-server -p tca-timer-ctl --locked
+
   tauri-msi:
     # TODO(§14.1): wire tauri-apps/tauri-action for MSI artifact + Release
     # attachment. Disabled until icons / signing settings / workflow secrets

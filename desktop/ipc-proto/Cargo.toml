@@ -1,0 +1,12 @@
+[package]
+name = "tca-timer-ipc-proto"
+description = "Local IPC protocol shared between tca-timer-desktop and tca-timer-ctl (§9.6)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+interprocess = { workspace = true }

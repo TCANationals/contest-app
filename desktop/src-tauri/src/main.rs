@@ -3,9 +3,10 @@
 mod ipc_server;
 
 fn main() {
-    // TODO(§9.6.1): start the local HTTP control API on 127.0.0.1:17380 before
-    // the WebSocket connection to the backend.
-    ipc_server::start_placeholder();
+    // §9.6.1: the local IPC server (OS-agnostic socket — Unix domain socket
+    // on Linux/macOS, named pipe on Windows) MUST start before the backend
+    // WebSocket so shortcut actions work while offline.
+    ipc_server::run();
 
     tauri::Builder::default()
         .setup(|_app| {
