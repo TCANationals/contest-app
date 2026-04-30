@@ -1,6 +1,6 @@
 // Twilio and SES webhook handlers (§7.4.2, §7.4.3).
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import {
@@ -9,6 +9,7 @@ import {
   setEmailStatus,
   setPhoneStatus,
   insertAuditEvent,
+  type AuditEvent,
 } from '../db/dal.js';
 
 export function registerWebhookRoutes(app: FastifyInstance): void {
@@ -39,14 +40,10 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
         const judge = await findJudgeByPhone(fromNumber);
         if (judge) {
           await setPhoneStatus(judge.sub, 'opted_out');
-          await insertAuditEvent({
-            room: judge.enabled_rooms[0] ?? '_global_',
-            atServerMs: Date.now(),
-            actorSub: 'system',
-            actorEmail: null,
+          await writeOptOutAudit(app.log, judge.enabled_rooms, {
             eventType: 'SMS_OPTED_OUT',
             payload: { judgeSub: judge.sub },
-          }).catch(() => {});
+          });
         }
       }
     }
@@ -111,14 +108,10 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
         const judge = await findJudgeByEmail(r.emailAddress);
         if (judge) {
           await setEmailStatus(judge.sub, 'opted_out');
-          await insertAuditEvent({
-            room: judge.enabled_rooms[0] ?? '_global_',
-            atServerMs: Date.now(),
-            actorSub: 'system',
-            actorEmail: null,
+          await writeOptOutAudit(app.log, judge.enabled_rooms, {
             eventType: 'EMAIL_OPTED_OUT',
             payload: { judgeSub: judge.sub, kind },
-          }).catch(() => {});
+          });
         }
       }
       return { ok: true };
@@ -143,4 +136,39 @@ function safeEq(a: string, b: string): boolean {
   const bb = Buffer.from(b, 'utf8');
   if (ba.length !== bb.length) return false;
   return timingSafeEqual(ba, bb);
+}
+
+/**
+ * Write an opt-out audit row for every room the judge was enabled in.
+ * `audit_log.room` is FK-bound to `rooms(id)`, so there is no synthetic
+ * global scope we can use; a judge with an empty `enabled_rooms` gets
+ * their opt-out logged via the logger only. The DB table of record for
+ * opt-out state itself is `judge_prefs.{phone,email}_status`, which has
+ * already been updated by the caller — this audit row is a breadcrumb,
+ * not the source of truth.
+ */
+async function writeOptOutAudit(
+  log: FastifyBaseLogger,
+  enabledRooms: readonly string[],
+  event: Pick<AuditEvent, 'eventType' | 'payload'>,
+): Promise<void> {
+  if (enabledRooms.length === 0) {
+    log.info(event, 'opt_out_without_room_enrollment');
+    return;
+  }
+  const now = Date.now();
+  await Promise.all(
+    enabledRooms.map((room) =>
+      insertAuditEvent({
+        room,
+        atServerMs: now,
+        actorSub: 'system',
+        actorEmail: null,
+        eventType: event.eventType,
+        payload: event.payload,
+      }).catch((err) => {
+        log.warn({ err, room, eventType: event.eventType }, 'opt_out_audit_write_failed');
+      }),
+    ),
+  );
 }

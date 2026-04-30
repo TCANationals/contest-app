@@ -63,18 +63,30 @@ describe('sampleClockDriftOnce', () => {
     };
 
     try {
-      // Average 10 samples to smooth out the residual ±quantization noise.
-      let total = 0;
-      const N = 10;
+      // Any individual sample has up to ±500 ms of quantization noise, but
+      // the spec we care about is that the warning-significance gate
+      // (threshold + HTTP_DATE_QUANTIZATION_MS = 700 ms) never fires for a
+      // perfectly-synced peer. Verify that every sample falls inside that
+      // window, and that the mean is well inside the bare threshold.
+      const samples: number[] = [];
+      const N = 20;
       for (let i = 0; i < N; i++) {
         const d = await sampleClockDriftOnce('https://example.test');
         assert.ok(d != null);
-        total += d!;
+        samples.push(d!);
+        // Spread samples across the second to de-correlate quantization.
+        await new Promise((r) => setTimeout(r, 37));
       }
-      const mean = total / N;
-      // Without midpoint correction, the mean drift would be +500 ms (the
-      // average truncation). With correction, it must be near zero — well
-      // below the warning threshold so no false positives fire.
+      for (const s of samples) {
+        assert.ok(
+          Math.abs(s) <= HTTP_DATE_QUANTIZATION_MS + 100,
+          `individual drift ${s}ms exceeds quantization window (±${HTTP_DATE_QUANTIZATION_MS + 100}ms)`,
+        );
+      }
+      const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+      // Before the midpoint fix the mean was systematically +500 ms. After
+      // the fix it should hover near zero with ≪ threshold amplitude after
+      // spreading 20 samples across ≥ 1 full second.
       assert.ok(
         Math.abs(mean) < CLOCK_DRIFT_THRESHOLD_MS,
         `mean drift ${mean.toFixed(1)}ms exceeds ${CLOCK_DRIFT_THRESHOLD_MS}ms threshold`,

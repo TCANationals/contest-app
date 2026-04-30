@@ -3,6 +3,7 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import cookie from '@fastify/cookie';
+import formbody from '@fastify/formbody';
 
 import { registerJudgeWs } from './ws/judge.js';
 import { registerContestantWs } from './ws/contestant.js';
@@ -25,6 +26,9 @@ export async function buildServer() {
   });
 
   await app.register(cookie);
+  // Twilio webhooks arrive as application/x-www-form-urlencoded, so we need
+  // the formbody plugin before registering the webhook routes.
+  await app.register(formbody);
   await app.register(websocket);
 
   // Per-source-IP connection limiter for WS upgrades (§6.4).

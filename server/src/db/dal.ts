@@ -402,6 +402,11 @@ export interface DalOverrides {
   getJudgePrefs?: (sub: string) => Promise<JudgePrefsRow | null>;
   queryAuditLog?: (filter: AuditLogFilter) => Promise<AuditEvent[]>;
   pruneAuditLog?: (olderThanMs: number) => Promise<number>;
+  setPhoneStatus?: (sub: string, status: JudgePrefsRow['phone_status']) => Promise<void>;
+  setEmailStatus?: (sub: string, status: JudgePrefsRow['email_status']) => Promise<void>;
+  upsertJudgePrefs?: (row: JudgePrefsPatch) => Promise<void>;
+  insertRoom?: (id: string, displayLabel: string, tokenHash: string) => Promise<void>;
+  updateRoomTokenHash?: (id: string, tokenHash: string) => Promise<void>;
 }
 
 export const __testOverrides: DalOverrides = {};
@@ -410,11 +415,21 @@ export const __testOverrides: DalOverrides = {};
 // Public exports route through the override hook.
 // ---------------------------------------------------------------------------
 
-export const insertRoom = _insertRoom;
-export const updateRoomTokenHash = _updateRoomTokenHash;
-export const upsertJudgePrefs = _upsertJudgePrefs;
-export const setPhoneStatus = _setPhoneStatus;
-export const setEmailStatus = _setEmailStatus;
+export function insertRoom(id: string, displayLabel: string, tokenHash: string): Promise<void> {
+  return (__testOverrides.insertRoom ?? _insertRoom)(id, displayLabel, tokenHash);
+}
+export function updateRoomTokenHash(id: string, tokenHash: string): Promise<void> {
+  return (__testOverrides.updateRoomTokenHash ?? _updateRoomTokenHash)(id, tokenHash);
+}
+export function upsertJudgePrefs(row: JudgePrefsPatch): Promise<void> {
+  return (__testOverrides.upsertJudgePrefs ?? _upsertJudgePrefs)(row);
+}
+export function setPhoneStatus(sub: string, status: JudgePrefsRow['phone_status']): Promise<void> {
+  return (__testOverrides.setPhoneStatus ?? _setPhoneStatus)(sub, status);
+}
+export function setEmailStatus(sub: string, status: JudgePrefsRow['email_status']): Promise<void> {
+  return (__testOverrides.setEmailStatus ?? _setEmailStatus)(sub, status);
+}
 
 export function getRoom(id: string): Promise<RoomRow | null> {
   return (__testOverrides.getRoom ?? _getRoom)(id);
