@@ -33,6 +33,7 @@ describe('queue chime subscription', () => {
     class FakeGain {
       gain = {
         value: 0,
+        setValueAtTime: vi.fn(),
         linearRampToValueAtTime: vi.fn(),
       };
       connect(next: unknown) { return next; }
@@ -79,6 +80,17 @@ describe('queue chime subscription', () => {
     expect(oscillatorStart).toHaveBeenCalledTimes(1);
     useAppStore.setState({ helpQueue: makeQueue('demo', 3, 3) });
     expect(oscillatorStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not chime on the very first non-empty queue snapshot for a room (baseline)', () => {
+    // No earlier null→queue or 0→0 step. The judge connects and the first
+    // HELP_QUEUE frame already has entries — this is the baseline, not a
+    // transition we observed, so no chime.
+    useAppStore.setState({ helpQueue: makeQueue('demo', 3) });
+    expect(oscillatorStart).not.toHaveBeenCalled();
+    // A subsequent add should also not chime (still non-empty).
+    useAppStore.setState({ helpQueue: makeQueue('demo', 4, 2) });
+    expect(oscillatorStart).not.toHaveBeenCalled();
   });
 
   it('does not chime when entering a different room with an already non-empty queue', () => {

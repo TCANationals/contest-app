@@ -20,12 +20,17 @@ export function playChime(): void {
     const gain = ctx.createGain();
     osc.frequency.value = 880;
     osc.type = 'sine';
-    gain.gain.value = 0;
-    gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.02);
-    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.45);
+    // Per the Web Audio spec, `linearRampToValueAtTime` requires a preceding
+    // automation event to anchor the ramp's start. Setting `.value` only
+    // changes the intrinsic value, it does NOT enqueue an event — Safari /
+    // WebKit will produce silence or undefined behavior without this anchor.
+    const t0 = ctx.currentTime;
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(0.15, t0 + 0.02);
+    gain.gain.linearRampToValueAtTime(0, t0 + 0.45);
     osc.connect(gain).connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.5);
+    osc.stop(t0 + 0.5);
     setTimeout(() => ctx.close(), 800);
   } catch {
     /* audio blocked until user gesture — skip silently. */
@@ -34,7 +39,7 @@ export function playChime(): void {
 
 let installed = false;
 let prevRoom: string | null = null;
-let prevCount = 0;
+let prevCount: number | null = null;
 
 /**
  * Subscribe (once) to store updates and play the chime on every actual
@@ -44,36 +49,47 @@ let prevCount = 0;
  * would re-fire whenever the user re-enters /help with an already-non-empty
  * queue (incorrect per §7.2: only true transitions chime).
  *
- * Room changes reset the tracker so a switch from a non-empty room to a
- * different non-empty room also chimes (each room is its own queue).
+ * Subtleties:
+ *  • `prevCount` starts at `null` and stays null until we have observed the
+ *    *first* HELP_QUEUE frame for the current room. The first frame is a
+ *    baseline (it tells us what the queue already looks like when this
+ *    judge connected) and MUST NOT chime, even if the queue is non-empty.
+ *  • A room switch resets the tracker to null so the next room's first
+ *    frame is also treated as a fresh baseline.
  */
 export function installQueueChime(): void {
   if (installed) return;
   installed = true;
-  // Seed from current store state so the very first STATE/HELP_QUEUE frame
-  // received from the WS doesn't false-fire after page load.
   const initial = useAppStore.getState();
   prevRoom = initial.room;
-  prevCount = countOf(initial.helpQueue);
+  prevCount = initial.helpQueue ? countOf(initial.helpQueue) : null;
 
   useAppStore.subscribe((state, prevState) => {
     const queueChanged = state.helpQueue !== prevState.helpQueue;
     const roomChanged = state.room !== prevRoom;
     if (!queueChanged && !roomChanged) return;
 
-    const count = countOf(state.helpQueue);
     if (roomChanged) {
       prevRoom = state.room;
-      prevCount = count;
+      // Re-baseline. The next HELP_QUEUE frame for the new room will set
+      // prevCount; that frame itself will not chime.
+      prevCount = state.helpQueue ? countOf(state.helpQueue) : null;
       return;
     }
-    if (prevCount === 0 && count > 0) {
+
+    if (state.helpQueue == null) {
+      prevCount = null;
+      return;
+    }
+    const count = countOf(state.helpQueue);
+    // First observed queue for the current room is the baseline — no chime.
+    if (prevCount !== null && prevCount === 0 && count > 0) {
       playChime();
     }
     prevCount = count;
   });
 }
 
-function countOf(q: HelpQueue | null | undefined): number {
-  return q?.entries.length ?? 0;
+function countOf(q: HelpQueue): number {
+  return q.entries.length;
 }
