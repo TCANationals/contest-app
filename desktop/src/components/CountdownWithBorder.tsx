@@ -4,7 +4,7 @@ interface CountdownWithBorderProps {
   borderColor: string;
 }
 
-export function CountdownWithBorder({ text, textColor, borderColor }: CountdownWithBorderProps): JSX.Element {
+export function CountdownWithBorder({ text, textColor, borderColor }: CountdownWithBorderProps) {
   return (
     <span
       style={{

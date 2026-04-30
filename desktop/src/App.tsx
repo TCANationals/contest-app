@@ -1,6 +1,6 @@
 import { CountdownWithBorder } from "./components/CountdownWithBorder";
 
-export function App(): JSX.Element {
+export function App() {
   return (
     <main
       style={{
