@@ -235,46 +235,66 @@ export function installDemoMode(): void {
     const u = new URL(url, window.location.origin);
     const method = (init?.method ?? 'GET').toUpperCase();
 
+    // Every JSON response below is shaped to match the wire schemas
+    // in `@tca-timer/shared/api`. The SPA's API client (§11.2)
+    // validates every response with zod and throws an `ApiError` on
+    // mismatch, so the demo mode is only useful when these payloads
+    // pass `Wire*EnvelopeSchema.safeParse`. If a schema field is
+    // ever added or renamed, this shim has to be updated in lockstep
+    // — the spa/test/demoMode.test.ts suite asserts that.
+
     if (u.pathname === '/api/judge/ticket' && method === 'POST') {
-      return jsonResponse({ ticket: 'demo-ticket', expiresAt: Date.now() + 30_000 });
+      // WireTicketSchema: { ticket, expiresInMs }. Demo previously
+      // emitted `expiresAt`, the SPA-facing field, which fails
+      // validation.
+      return jsonResponse({ ticket: 'demo-ticket', expiresInMs: 30_000 });
     }
     if (u.pathname === '/api/judge/rooms' && method === 'GET') {
-      return jsonResponse(
-        Object.entries(rooms).map(([id, r]) => ({ id, displayLabel: r.displayLabel })),
-      );
+      // WireRoomsEnvelopeSchema: { rooms: [{ id, display_label, created_at? }] }.
+      const since = Date.now() - 24 * 60 * 60 * 1000;
+      return jsonResponse({
+        rooms: Object.entries(rooms).map(([id, r], i) => ({
+          id,
+          display_label: r.displayLabel,
+          created_at: new Date(since + i * 60_000).toISOString(),
+        })),
+      });
     }
     if (u.pathname === '/api/judge/log' && method === 'GET') {
+      // WireAuditEnvelopeSchema: { entries: [...] }.
       const room = u.searchParams.get('room') ?? '';
       const now = Date.now();
-      return jsonResponse([
-        {
-          id: 1,
-          room,
-          atServerMs: now - 60_000,
-          actorSub: 'demo-judge',
-          actorEmail: 'demo@example.com',
-          eventType: 'TIMER_SET',
-          payload: { durationMs: 300_000, message: 'Practice block' },
-        },
-        {
-          id: 2,
-          room,
-          atServerMs: now - 45_000,
-          actorSub: 'system',
-          actorEmail: null,
-          eventType: 'HELP_REQUEST',
-          payload: { contestantId: 'contestant-04' },
-        },
-        {
-          id: 3,
-          room,
-          atServerMs: now - 30_000,
-          actorSub: 'demo-judge',
-          actorEmail: 'demo@example.com',
-          eventType: 'HELP_ACK',
-          payload: { contestantId: 'contestant-04', waitMs: 15_000 },
-        },
-      ]);
+      return jsonResponse({
+        entries: [
+          {
+            id: 1,
+            room,
+            atServerMs: now - 60_000,
+            actorSub: 'demo-judge',
+            actorEmail: 'demo@example.com',
+            eventType: 'TIMER_SET',
+            payload: { durationMs: 300_000, message: 'Practice block' },
+          },
+          {
+            id: 2,
+            room,
+            atServerMs: now - 45_000,
+            actorSub: 'system',
+            actorEmail: null,
+            eventType: 'HELP_REQUEST',
+            payload: { contestantId: 'contestant-04' },
+          },
+          {
+            id: 3,
+            room,
+            atServerMs: now - 30_000,
+            actorSub: 'demo-judge',
+            actorEmail: 'demo@example.com',
+            eventType: 'HELP_ACK',
+            payload: { contestantId: 'contestant-04', waitMs: 15_000 },
+          },
+        ],
+      });
     }
     if (u.pathname.startsWith('/api/judge/log.csv')) {
       const body = [
@@ -287,14 +307,28 @@ export function installDemoMode(): void {
       });
     }
     if (u.pathname === '/api/judge/prefs') {
+      // WirePrefsEnvelopeSchema: { prefs: WirePrefs }. Note: WirePrefs
+      // names the CF-Access-derived address `email` (the SPA renames
+      // it to `lastSeenEmail` after parsing). The demo store keeps
+      // wire-format internally to avoid translating twice.
       if (method === 'GET') {
-        return jsonResponse(getPrefs());
+        return jsonResponse({ prefs: getDemoPrefs() });
       }
       if (method === 'PUT') {
-        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-        setPrefs(body);
-        return jsonResponse(getPrefs());
+        const patch = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : {};
+        setDemoPrefs(patch);
+        return jsonResponse({ prefs: getDemoPrefs() });
       }
+    }
+    if (u.pathname === '/api/judge/prefs/verify-phone' && method === 'POST') {
+      // WireVerifyPhoneSchema: { phoneStatus }.
+      return jsonResponse({ phoneStatus: 'verified' });
+    }
+    if (u.pathname === '/api/judge/prefs/verify-email' && method === 'POST') {
+      // WireVerifyEmailSchema: { emailStatus }.
+      return jsonResponse({ emailStatus: 'verified' });
     }
     return realFetch(input, init);
   };
@@ -327,21 +361,22 @@ function jsonResponse(obj: unknown): Response {
 
 const prefsKey = 'tca-timer.demo.prefs';
 
-function getPrefs() {
-  try {
-    const raw = window.localStorage.getItem(prefsKey);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    /* noop */
-  }
+/**
+ * Defaults shaped to match `WirePrefsSchema` so the GET endpoint
+ * returns a payload that passes the SPA's runtime validation. The
+ * SPA's API client renames `email` → `lastSeenEmail` post-parse (see
+ * `prefsFromWire`), so we keep the demo-side store in wire format
+ * and let the client do the translation.
+ */
+function defaultDemoPrefs() {
   return {
     sub: 'demo-judge',
-    lastSeenEmail: 'demo@example.com',
+    email: 'demo@example.com',
     phoneE164: null,
     phoneStatus: 'none',
     emailAddress: null,
     emailStatus: 'none',
-    enabledRooms: [],
+    enabledRooms: [] as string[],
     quietHoursStart: null,
     quietHoursEnd: null,
     quietHoursWeekdays: 0,
@@ -349,13 +384,41 @@ function getPrefs() {
   };
 }
 
-function setPrefs(patch: Record<string, unknown>): void {
-  const next = { ...getPrefs(), ...patch };
+// In-memory fallback so the demo prefs round-trip even when
+// `window.localStorage` is unavailable (private browsing, server-side
+// renders, jsdom's partial Storage shim in tests). When localStorage
+// works, this is just a perf cache that mirrors the persisted value.
+let memoryPrefs: ReturnType<typeof defaultDemoPrefs> | null = null;
+
+function getDemoPrefs() {
+  if (memoryPrefs) return memoryPrefs;
+  try {
+    const raw = window.localStorage.getItem(prefsKey);
+    if (raw) {
+      const parsed = JSON.parse(raw) as ReturnType<typeof defaultDemoPrefs>;
+      memoryPrefs = parsed;
+      return parsed;
+    }
+  } catch {
+    /* noop */
+  }
+  memoryPrefs = defaultDemoPrefs();
+  return memoryPrefs;
+}
+
+function setDemoPrefs(patch: Record<string, unknown>): void {
+  const next = { ...getDemoPrefs(), ...patch } as ReturnType<typeof defaultDemoPrefs>;
+  memoryPrefs = next;
   try {
     window.localStorage.setItem(prefsKey, JSON.stringify(next));
   } catch {
     /* noop */
   }
+}
+
+/** Test-only: drop the in-memory cache so the next read re-hydrates. */
+export function _resetDemoPrefs(): void {
+  memoryPrefs = null;
 }
 
 export function demoModeActive(): boolean {

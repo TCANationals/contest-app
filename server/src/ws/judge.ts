@@ -10,6 +10,7 @@ import {
   broadcastState,
   broadcastHelpQueueToJudges,
   helpQueueFrame,
+  notifyContestantHelpAcked,
   stateFrame,
   pongFrame,
   errorFrame,
@@ -208,6 +209,16 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
       });
 
       broadcastHelpQueueToJudges(ctx.room);
+      // §7.1: tell the affected contestant their help_pending state
+      // has cleared. Without this, the overlay's button stays stuck in
+      // the "pending" color until the contestant manually toggles it.
+      notifyContestantHelpAcked(
+        ctx.room,
+        contestantId,
+        ctx.room.helpQueue.version,
+        res.waitMs ?? 0,
+        now,
+      );
       return;
     }
 

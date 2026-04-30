@@ -360,6 +360,109 @@ describe('WsClient', () => {
     c.stop();
   });
 
+  describe('HELP_ACKED handling (§7.1)', () => {
+    // §7.1: a judge clicks Acknowledge → server sends a targeted
+    // HELP_ACKED frame to the affected contestant → overlay clears
+    // help_pending. These tests lock in that the inbound frame
+    // produces the right `onHelpPendingChanged(false)` transition
+    // and is properly idempotent against ack-races (e.g. self-cancel
+    // and judge-ack landing within the same tick).
+    const sampleAckPayload = (overrides: Record<string, unknown> = {}) => ({
+      type: 'HELP_ACKED',
+      room: 'r',
+      contestantId: 'alice',
+      version: 7,
+      waitMs: 1234,
+      ackedAtServerMs: 1_700_000_000_000,
+      ...overrides,
+    });
+
+    it('clears outstanding help and fires onHelpPendingChanged(false)', () => {
+      const transitions: boolean[] = [];
+      const c = new WsClient({
+        url: 'wss://h',
+        onState: () => undefined,
+        onStatus: () => undefined,
+        onOffset: () => undefined,
+        onHelpPendingChanged: (p) => transitions.push(p),
+        WebSocketImpl: asWSImpl(),
+      });
+      c.start();
+      const ws = FakeWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      expect(c.sendHelpRequest()).toBe(true);
+      expect(transitions).toEqual([true]);
+
+      ws.simulateMessage(JSON.stringify(sampleAckPayload()));
+      expect(transitions).toEqual([true, false]);
+
+      // A second HELP_ACKED is idempotent — overlay state is already
+      // cleared so no extra transition fires.
+      ws.simulateMessage(JSON.stringify(sampleAckPayload()));
+      expect(transitions).toEqual([true, false]);
+
+      c.stop();
+    });
+
+    it('is a no-op when no help request is pending (late ack race)', () => {
+      // Race scenario: contestant self-cancels a heartbeat before the
+      // judge's ack lands. The HELP_ACKED frame is now stale relative
+      // to local state. The client must not flip `help_pending` back
+      // (it's already false) and must not double-fire the transition.
+      const transitions: boolean[] = [];
+      const c = new WsClient({
+        url: 'wss://h',
+        onState: () => undefined,
+        onStatus: () => undefined,
+        onOffset: () => undefined,
+        onHelpPendingChanged: (p) => transitions.push(p),
+        WebSocketImpl: asWSImpl(),
+      });
+      c.start();
+      const ws = FakeWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      ws.simulateMessage(JSON.stringify(sampleAckPayload()));
+      expect(transitions).toEqual([]);
+
+      c.stop();
+    });
+
+    it('arriving during a reconnect-flush race produces balanced true/false transitions', () => {
+      // Contestant goes offline with a help request still queued
+      // locally (never sent). On reconnect, the queued request
+      // flushes and fires `true`. The judge then acks — `false`.
+      // Sanity-check the balanced [true, false] sequence and that no
+      // duplicate request remains queued for any future reconnect.
+      const transitions: boolean[] = [];
+      const c = new WsClient({
+        url: 'wss://h',
+        onState: () => undefined,
+        onStatus: () => undefined,
+        onOffset: () => undefined,
+        onHelpPendingChanged: (p) => transitions.push(p),
+        WebSocketImpl: asWSImpl(),
+      });
+      c.start();
+      const ws = FakeWebSocket.instances[0]!;
+
+      // Socket is CONNECTING — sendHelpRequest queues locally.
+      expect(c.sendHelpRequest()).toBe(false);
+      expect(transitions).toEqual([]);
+
+      ws.simulateOpen();
+      // The queued request flushed on open and fired `true`.
+      expect(transitions).toEqual([true]);
+      expect(ws.sent.map((s) => JSON.parse(s).type)).toContain('HELP_REQUEST');
+
+      ws.simulateMessage(JSON.stringify(sampleAckPayload()));
+      expect(transitions).toEqual([true, false]);
+
+      c.stop();
+    });
+  });
+
   it('reports help-pending transitions via onHelpPendingChanged', () => {
     const pendingTransitions: boolean[] = [];
     const c = new WsClient({

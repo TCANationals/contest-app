@@ -280,6 +280,29 @@ export const ErrorFrameSchema = z.object({
 });
 export type ErrorFrame = z.infer<typeof ErrorFrameSchema>;
 
+/**
+ * §7.1 HELP_ACKED frame — server → the specific contestant whose help
+ * request was just acknowledged by a judge. Contestants don't receive
+ * `HELP_QUEUE` (judge-only by §5.2), so this targeted notification is
+ * how the overlay learns its `help_pending` state has cleared and can
+ * raise the spec'd "Judge acknowledged" toast before reverting the
+ * button.
+ *
+ * `version` is the queue version *after* the ack so the overlay can
+ * correlate with the `HELP_ACK` it would have sent had it self-
+ * cancelled at the same instant. `waitMs` is the same value the
+ * server records in the audit log for this contestant.
+ */
+export const HelpAckedFrameSchema = z.object({
+  type: z.literal('HELP_ACKED'),
+  room: z.string(),
+  contestantId: z.string(),
+  version: z.number().int(),
+  waitMs: z.number(),
+  ackedAtServerMs: z.number(),
+});
+export type HelpAckedFrame = z.infer<typeof HelpAckedFrameSchema>;
+
 /** §5.2 server → judge inbound. */
 export const JudgeInboundFrameSchema = z.discriminatedUnion('type', [
   StateFrameSchema,
@@ -293,9 +316,27 @@ export type JudgeInboundFrame = z.infer<typeof JudgeInboundFrameSchema>;
 export const ContestantInboundFrameSchema = z.discriminatedUnion('type', [
   StateFrameSchema,
   PongFrameSchema,
+  HelpAckedFrameSchema,
   ErrorFrameSchema,
 ]);
 export type ContestantInboundFrame = z.infer<typeof ContestantInboundFrameSchema>;
+
+/**
+ * Superset of every frame the server can emit — used by the server's
+ * outbound-frame contract check (`server/src/rooms.ts`) so a single
+ * schema validates STATE / PONG / HELP_QUEUE / HELP_ACKED / ERROR
+ * regardless of whether the destination is a judge or a contestant
+ * socket. The narrower per-consumer schemas above are still used for
+ * inbound validation on each client.
+ */
+export const ServerOutboundFrameSchema = z.discriminatedUnion('type', [
+  StateFrameSchema,
+  PongFrameSchema,
+  HelpQueueFrameSchema,
+  HelpAckedFrameSchema,
+  ErrorFrameSchema,
+]);
+export type ServerOutboundFrame = z.infer<typeof ServerOutboundFrameSchema>;
 
 /** §5.2 judge → server outbound. */
 export const JudgeOutboundFrameSchema = z.discriminatedUnion('type', [

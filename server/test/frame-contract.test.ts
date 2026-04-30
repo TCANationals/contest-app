@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import {
   stateFrame,
   helpQueueFrame,
+  helpAckedFrame,
   pongFrame,
   errorFrame,
 } from '../src/rooms.js';
@@ -81,5 +82,25 @@ describe('outbound frame contract (§5.2)', () => {
       code: 'rate_limit',
       message: 'too many PINGs',
     });
+  });
+
+  it('helpAckedFrame validates and serializes the §7.1 targeted notify', () => {
+    const f = helpAckedFrame(ROOM, 'alice', 5, 1234, 1_700_000_000_000);
+    assert.deepEqual(JSON.parse(f), {
+      type: 'HELP_ACKED',
+      room: ROOM,
+      contestantId: 'alice',
+      version: 5,
+      waitMs: 1234,
+      ackedAtServerMs: 1_700_000_000_000,
+    });
+  });
+
+  it('helpAckedFrame rejects malformed payloads in dev', () => {
+    assert.throws(
+      // @ts-expect-error deliberate violation: contestantId must be a string
+      () => helpAckedFrame(ROOM, 42, 5, 1234, 1_700_000_000_000),
+      /outbound WS frame violates §5.2 contract/,
+    );
   });
 });

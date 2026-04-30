@@ -259,6 +259,24 @@ export class WsClient {
         this.opts.onState(timer as TimerState);
         break;
       }
+      case 'HELP_ACKED': {
+        // §7.1: a judge acknowledged this contestant's help request.
+        // Drain local-only queued state unconditionally — a stale
+        // queued cancel or an offline-queued request both become
+        // moot the moment the server confirms the request has been
+        // ack'd through some other path.
+        this.pendingHelpRequest = false;
+        this.pendingHelpCancel = false;
+        // Only emit `onHelpPendingChanged(false)` when a prior `true`
+        // was observed externally (`helpOutstanding`), so the
+        // transition stream stays balanced. A late ack arriving after
+        // a self-cancel race must not fire a spurious second `false`.
+        if (this.helpOutstanding) {
+          this.helpOutstanding = false;
+          this.opts.onHelpPendingChanged?.(false);
+        }
+        break;
+      }
       case 'ERROR':
         // Contestants don't surface ERROR frames anywhere user-visible
         // today; close + reconnect is enough to recover from anything

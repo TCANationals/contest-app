@@ -6,8 +6,8 @@
 
 import type { WebSocket } from 'ws';
 import {
-  JudgeInboundFrameSchema,
-  type JudgeInboundFrame,
+  ServerOutboundFrameSchema,
+  type ServerOutboundFrame,
 } from '@tca-timer/shared/api';
 
 import { initialHelpQueue, type HelpQueue, isInQueue } from './help-queue.js';
@@ -84,14 +84,14 @@ export function allRoomStates(): ReadonlyMap<string, RoomState> {
  * objects during parse, and broadcasts fire several times per second
  * under load.
  *
- * The judge inbound schema is a superset of the contestant inbound
- * schema (it adds `HELP_QUEUE`), so using it for *every* outbound
- * frame validates both directions without needing to know which
- * socket type the frame is destined for at construction time.
+ * `ServerOutboundFrameSchema` is the union of every frame any client
+ * (judge or contestant) is allowed to receive, so it works for every
+ * builder below without needing to know which socket type a frame is
+ * destined for at construction time.
  */
-function assertOutboundFrameContract(frame: JudgeInboundFrame): void {
+function assertOutboundFrameContract(frame: ServerOutboundFrame): void {
   if (process.env.NODE_ENV === 'production') return;
-  const result = JudgeInboundFrameSchema.safeParse(frame);
+  const result = ServerOutboundFrameSchema.safeParse(frame);
   if (result.success) return;
   const detail = result.error.issues
     .slice(0, 3)
@@ -101,7 +101,7 @@ function assertOutboundFrameContract(frame: JudgeInboundFrame): void {
 }
 
 export function stateFrame(state: TimerState, connectedContestants: number): string {
-  const frame: JudgeInboundFrame = {
+  const frame: ServerOutboundFrame = {
     type: 'STATE',
     ...state,
     connectedContestants,
@@ -112,7 +112,30 @@ export function stateFrame(state: TimerState, connectedContestants: number): str
 }
 
 export function helpQueueFrame(queue: HelpQueue): string {
-  const frame: JudgeInboundFrame = { type: 'HELP_QUEUE', ...queue };
+  const frame: ServerOutboundFrame = { type: 'HELP_QUEUE', ...queue };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
+}
+
+/**
+ * Build a HELP_ACKED frame string for the targeted notify in §7.1
+ * (judge-ack → contestant overlay clears `help_pending`).
+ */
+export function helpAckedFrame(
+  room: string,
+  contestantId: string,
+  version: number,
+  waitMs: number,
+  ackedAtServerMs: number,
+): string {
+  const frame: ServerOutboundFrame = {
+    type: 'HELP_ACKED',
+    room,
+    contestantId,
+    version,
+    waitMs,
+    ackedAtServerMs,
+  };
   assertOutboundFrameContract(frame);
   return JSON.stringify(frame);
 }
@@ -123,7 +146,7 @@ export function helpQueueFrame(queue: HelpQueue): string {
  * flows through the same §5.2 contract check.
  */
 export function pongFrame(t0: number, t1: number, t2: number): string {
-  const frame: JudgeInboundFrame = { type: 'PONG', t0, t1, t2 };
+  const frame: ServerOutboundFrame = { type: 'PONG', t0, t1, t2 };
   assertOutboundFrameContract(frame);
   return JSON.stringify(frame);
 }
@@ -132,7 +155,7 @@ export function pongFrame(t0: number, t1: number, t2: number): string {
  * Build an ERROR frame string. Same rationale as `pongFrame`.
  */
 export function errorFrame(code: string, message: string): string {
-  const frame: JudgeInboundFrame = { type: 'ERROR', code, message };
+  const frame: ServerOutboundFrame = { type: 'ERROR', code, message };
   assertOutboundFrameContract(frame);
   return JSON.stringify(frame);
 }
@@ -146,6 +169,37 @@ export function broadcastState(room: RoomState): void {
 export function broadcastHelpQueueToJudges(room: RoomState): void {
   const frame = helpQueueFrame(room.helpQueue);
   for (const s of room.judges) safeSend(s, frame);
+}
+
+/**
+ * §7.1 targeted notify: tell the contestant whose help request was
+ * just acknowledged by a judge so their overlay can clear
+ * `help_pending` and show the spec'd "Judge acknowledged" toast.
+ *
+ * Multiple sockets can claim the same `contestantId` (rare but
+ * possible — e.g. the contestant has two windows open or briefly
+ * doubled-up during a reconnect race). All matching sockets are
+ * notified; non-matches are skipped.
+ */
+export function notifyContestantHelpAcked(
+  room: RoomState,
+  contestantId: string,
+  version: number,
+  waitMs: number,
+  ackedAtServerMs: number,
+): void {
+  const frame = helpAckedFrame(
+    room.id,
+    contestantId,
+    version,
+    waitMs,
+    ackedAtServerMs,
+  );
+  for (const s of room.contestants) {
+    if (room.contestantIdBySocket.get(s) === contestantId) {
+      safeSend(s, frame);
+    }
+  }
 }
 
 export function safeSend(socket: WebSocket, frame: string): void {
