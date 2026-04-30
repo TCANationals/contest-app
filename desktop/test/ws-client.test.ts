@@ -150,6 +150,59 @@ describe('WsClient', () => {
     c.stop();
   });
 
+  it('clears stale offset samples when a new connection opens', () => {
+    // §6.3: a reconnect must start with an empty offset window so a
+    // server clock change between sessions doesn't leave corrupt
+    // samples in the sliding median. We assert this by feeding a
+    // large server-ahead offset on the first session, then showing
+    // that a single fresh sample on the second session reports an
+    // offset close to 0 (which it could not if 7 stale samples were
+    // still in the median).
+    vi.setSystemTime(new Date(10_000));
+    const offsets: number[] = [];
+    const c = new WsClient({
+      url: 'wss://h',
+      onState: () => undefined,
+      onStatus: () => undefined,
+      onOffset: (o) => offsets.push(o),
+      WebSocketImpl: asWSImpl(),
+    });
+    c.start();
+    const ws1 = FakeWebSocket.instances[0]!;
+    ws1.simulateOpen();
+    // Craft t0/t1/t2 such that the computed offset is ~1_000_000 ms:
+    //   offset = ((t1 - t0) + (t2 - t3)) / 2
+    //   with t0 = 0 and t3 = Date.now() = 10_000, and t1 = t2,
+    //   pick t1 = 1_010_000 → offset = (1_010_000 + 1_000_000) / 2
+    //                                = 1_005_000.
+    for (let i = 0; i < 8; i += 1) {
+      ws1.simulateMessage(
+        JSON.stringify({ type: 'PONG', t0: 0, t1: 1_010_000, t2: 1_010_000 }),
+      );
+    }
+    const staleOffset = offsets[offsets.length - 1]!;
+    expect(staleOffset).toBeGreaterThan(500_000);
+
+    // Drop the connection, force jitter to 0 so the reconnect timer
+    // fires immediately, and send a clean PONG on the new session.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    ws1.simulateServerClose();
+    vi.advanceTimersByTime(1);
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!;
+    ws2.simulateOpen();
+    // Build t0/t1/t2 in terms of the current wall clock (t3) so the
+    // sample's computed offset is close to zero regardless of how many
+    // ms the warm-up burst advanced the fake clock by.
+    const now = Date.now();
+    ws2.simulateMessage(
+      JSON.stringify({ type: 'PONG', t0: now - 10, t1: now - 5, t2: now - 4 }),
+    );
+
+    const freshOffset = offsets[offsets.length - 1]!;
+    expect(Math.abs(freshOffset)).toBeLessThan(100);
+    c.stop();
+  });
+
   it('queues help-request while offline and flushes on reconnect', () => {
     const c = new WsClient({
       url: 'wss://h',

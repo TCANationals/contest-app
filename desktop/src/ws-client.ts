@@ -90,6 +90,11 @@ export class WsClient {
 
     this.ws.onopen = () => {
       this.attempt = 0;
+      // §6.3: each new connection MUST start its offset window empty so
+      // stale samples from a previous session (different server clock,
+      // restarted host, etc.) cannot corrupt the median-of-6 result. The
+      // warm-up burst below is responsible for seeding the new window.
+      this.tracker.clear();
       this.opts.onStatus({ connected: true, attempt: 0 });
       this.runWarmupBurst();
       if (this.pendingHelpRequest) {
