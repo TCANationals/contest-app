@@ -119,41 +119,35 @@ export function Overlay() {
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
-    let disposed = false;
-    (async () => {
-      unlisteners.push(
-        await tauriListen<boolean>('overlay:set-visible', (v) => {
-          setVisible(v);
-        }),
-      );
-      unlisteners.push(
-        await tauriListen<void>('overlay:send-help-request', () => {
-          const client = clientRef.current;
-          if (client) client.sendHelpRequest();
-        }),
-      );
-      unlisteners.push(
-        await tauriListen<void>('overlay:send-help-cancel', () => {
-          const client = clientRef.current;
-          if (client) client.sendHelpCancel();
-        }),
-      );
-      unlisteners.push(
-        await tauriListen<PositionCorner>('overlay:set-corner', (c) => {
-          // Tauri side emits one of the four PositionCorner literals
-          // ('topLeft' / 'topRight' / 'bottomLeft' / 'bottomRight')
-          // whenever the tray reposition action moves the window.
-          // We intentionally do NOT cross-validate the value here:
-          // unknown values fall through to the default styles used
-          // below.
-          setCorner(c);
-        }),
-      );
-    })().catch(() => undefined);
+    // Listeners are registered in parallel via Promise.all so a single
+    // failure does not abort the rest. Each registration has its own
+    // try/catch — mostly defensive: in dev we've seen the event-bridge
+    // permission check reject one listener and the previous serial
+    // setup would short-circuit there, leaving every later listener
+    // unregistered. Now they're independent.
+    const tryListen = async <T,>(event: string, handler: (p: T) => void) => {
+      try {
+        const u = await tauriListen<T>(event, handler);
+        unlisteners.push(u);
+      } catch {
+        // ignore: the overlay must still render even if one event
+        // type cannot be subscribed to (e.g. permissions misconfig).
+      }
+    };
+    void Promise.all([
+      tryListen<boolean>('overlay:set-visible', (v) => setVisible(v)),
+      tryListen<void>('overlay:send-help-request', () => {
+        const client = clientRef.current;
+        if (client) client.sendHelpRequest();
+      }),
+      tryListen<void>('overlay:send-help-cancel', () => {
+        const client = clientRef.current;
+        if (client) client.sendHelpCancel();
+      }),
+      tryListen<PositionCorner>('overlay:set-corner', (c) => setCorner(c)),
+    ]);
     return () => {
-      disposed = true;
       for (const u of unlisteners) u();
-      void disposed;
     };
   }, []);
 
