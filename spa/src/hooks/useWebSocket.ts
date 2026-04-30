@@ -87,7 +87,12 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
     const scheduleReconnect = () => {
       if (closedRef.current) return;
       const attempt = attemptRef.current++;
-      const base = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 4));
+      // Spec §6.4: exponential backoff with full jitter — base delays
+      // 1, 2, 4, 8, 16 s, capped at 30 s. Earlier code capped the exponent
+      // at 4, which clamped the base to 16 s and made the documented 30 s
+      // ceiling unreachable. Cap the *base* at 30 s instead so attempt 5
+      // and beyond all sit at the 30 s cap.
+      const base = Math.min(30_000, 1000 * 2 ** attempt);
       const delay = Math.floor(Math.random() * base);
       setConnection(
         attempt === 0 && !wasConnectedRef.current ? 'connecting' : 'reconnecting',
