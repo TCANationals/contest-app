@@ -157,9 +157,14 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       });
 
       ws.addEventListener('close', () => {
-        if (socketRef.current === ws) {
-          socketRef.current = null;
-        }
+        // A previously-replaced socket may close after a foreground-reopen has
+        // already attached fresh timers + a new socket to socketRef/timersRef.
+        // Only run the cleanup + reconnect path when *this* close event is
+        // for the currently-tracked socket; otherwise it would wipe the active
+        // connection's ping interval/warm-up timers and schedule a spurious
+        // reconnect.
+        if (socketRef.current !== ws) return;
+        socketRef.current = null;
         cleanupTimers();
         scheduleReconnect();
       });

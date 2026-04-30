@@ -4,16 +4,31 @@ import { useSearchParams } from 'react-router-dom';
 
 import { api, type AuditLogEntry } from '../api/client';
 
+type SinceWindow = 'all' | '1h' | '6h' | '24h';
+
+const WINDOW_MS: Record<Exclude<SinceWindow, 'all'>, number> = {
+  '1h': 60 * 60_000,
+  '6h': 6 * 60 * 60_000,
+  '24h': 24 * 60 * 60_000,
+};
+
+function sinceMs(window: SinceWindow): number | undefined {
+  return window === 'all' ? undefined : Date.now() - WINDOW_MS[window];
+}
+
 export function LogPage() {
   const [params] = useSearchParams();
   const room = params.get('room');
-  const [since, setSince] = useState<number | undefined>(undefined);
+  const [sinceWindow, setSinceWindow] = useState<SinceWindow>('all');
   const [filter, setFilter] = useState<string>('');
 
   const query = useQuery({
+    // Key on the stable window selector so the cached entry sticks across
+    // refetches; the actual `since` cutoff is recomputed on each fetch.
     enabled: !!room,
-    queryKey: ['log', room, since],
-    queryFn: async () => (room ? api.getLog(room, { since, limit: 200 }) : []),
+    queryKey: ['log', room, sinceWindow],
+    queryFn: async () =>
+      room ? api.getLog(room, { since: sinceMs(sinceWindow), limit: 200 }) : [],
     refetchInterval: 10_000,
   });
 
@@ -49,7 +64,7 @@ export function LogPage() {
         </div>
         <div className="flex gap-2">
           <a
-            href={api.csvLogUrl(room, since)}
+            href={api.csvLogUrl(room, sinceMs(sinceWindow))}
             className="bg-slate-900 text-white px-4 py-2 rounded text-sm font-medium"
             download
           >
@@ -67,16 +82,14 @@ export function LogPage() {
           className="flex-1 min-w-[10rem] px-3 py-2 border border-slate-300 rounded"
         />
         <select
-          value={since ?? ''}
-          onChange={(e) =>
-            setSince(e.target.value ? Number(e.target.value) : undefined)
-          }
+          value={sinceWindow}
+          onChange={(e) => setSinceWindow(e.target.value as SinceWindow)}
           className="px-3 py-2 border border-slate-300 rounded"
         >
-          <option value="">All time</option>
-          <option value={String(Date.now() - 60 * 60_000)}>Last hour</option>
-          <option value={String(Date.now() - 6 * 60 * 60_000)}>Last 6h</option>
-          <option value={String(Date.now() - 24 * 60 * 60_000)}>Last 24h</option>
+          <option value="all">All time</option>
+          <option value="1h">Last hour</option>
+          <option value="6h">Last 6h</option>
+          <option value="24h">Last 24h</option>
         </select>
       </div>
 
