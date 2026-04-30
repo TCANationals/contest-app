@@ -7,6 +7,13 @@
 // would report `dbDegraded: true` even after Postgres recovers. This job
 // flushes the ring every 5 seconds; on the first successful pass the ring
 // is empty again and `dbDegraded` clears.
+//
+// The drain is single-flight: a slow pass (e.g., one that stalls on a
+// long Postgres reconnection timeout) won't overlap with the next
+// interval tick. Without this guard, two concurrent passes could shift
+// the same requeued entry off the ring in quick succession and
+// double-count `entry.attempts`, dead-lettering transient failures
+// prematurely.
 
 import { flushRetries, isDbDegraded, ringSize } from './dal.js';
 
@@ -16,8 +23,11 @@ export function startRetryDrain(
   log: (msg: string, extra?: unknown) => void = () => {},
   intervalMs: number = DRAIN_INTERVAL_MS,
 ): () => void {
+  let inflight = false;
   const timer = setInterval(() => {
+    if (inflight) return;
     if (!isDbDegraded()) return;
+    inflight = true;
     void (async () => {
       try {
         const flushed = await flushRetries(log);
@@ -26,6 +36,8 @@ export function startRetryDrain(
         }
       } catch (err) {
         log('retry_drain_failed', err);
+      } finally {
+        inflight = false;
       }
     })();
   }, intervalMs);

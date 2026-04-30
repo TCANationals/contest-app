@@ -101,7 +101,6 @@ describe('retry ring drain (§11.5)', () => {
 
     const stop = startRetryDrain(() => {}, /* intervalMs */ 10);
     try {
-      // Wait for at least one drain tick.
       const deadline = Date.now() + 500;
       while (Date.now() < deadline) {
         if (!isDbDegraded()) break;
@@ -111,6 +110,48 @@ describe('retry ring drain (§11.5)', () => {
       assert.equal(ringSize(), 0);
       assert.equal(isDbDegraded(), false);
     } finally {
+      stop();
+      _resetRing();
+    }
+  });
+
+  it('is single-flight: a concurrent tick does not double-count requeued attempts', async () => {
+    // Repro for the Bugbot overlap scenario: pass 1 shifts a failing job,
+    // which is requeued at the tail with attempts=1. Pass 1 then awaits
+    // a slow job. Without a single-flight guard, the next interval tick
+    // fires pass 2, which shifts the requeued failing job and bumps its
+    // attempt count again — so a transient failure can reach
+    // MAX_ATTEMPTS after only `ceil(MAX_ATTEMPTS / 2)` real failures and
+    // get dead-lettered prematurely. With the guard, pass 2 is a no-op
+    // while pass 1 is still in flight.
+    _resetRing();
+    let failingInvocations = 0;
+    let slowResolve: (() => void) | null = null;
+    enqueueRetry(async () => {
+      failingInvocations += 1;
+      throw new Error('transient');
+    });
+    enqueueRetry(async () => {
+      await new Promise<void>((resolve) => {
+        slowResolve = resolve;
+      });
+    });
+
+    const stop = startRetryDrain(() => {}, /* intervalMs */ 5);
+    try {
+      // Let several interval ticks pass while pass 1 is stalled on the
+      // slow job. Without the guard we'd see `failingInvocations` grow
+      // once per tick.
+      await new Promise((r) => setTimeout(r, 80));
+      assert.equal(
+        failingInvocations,
+        1,
+        `drain must be single-flight; failing job ran ${failingInvocations} times while pass 1 was stalled`,
+      );
+      // Release the slow job so pass 1 finishes.
+      slowResolve?.();
+    } finally {
+      slowResolve?.();
       stop();
       _resetRing();
     }
