@@ -2,7 +2,7 @@
 //!
 //! Schema-versioned JSON written atomically to
 //! `%USERPROFILE%\.tcatimer\preferences.json` on Windows, and
-//! `~/.tcatimer/preferences.json` on Unix.
+//! `~/.tcatimer/preferences.json` on macOS and Linux.
 //!
 //! Error handling rules (§9.5.3):
 //!

@@ -9,8 +9,9 @@
 //! 2. Windows registry (production):
 //!    `HKLM\Software\TCANationals\Timer\Room`, `\RoomToken`, `\Server`.
 //! 3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
-//!    `/etc/tca-timer/config.json` on Unix. JSON keys `room`, `roomToken`,
-//!    `server`.
+//!    `/Library/Application Support/TCATimer/config.json` on macOS, and
+//!    `/etc/tca-timer/config.json` on Linux. JSON keys `room`,
+//!    `roomToken`, `server`.
 //! 4. Environment variables: `TCA_TIMER_ROOM`, `TCA_TIMER_ROOM_TOKEN`,
 //!    `TCA_TIMER_SERVER`.
 //!
@@ -244,6 +245,13 @@ pub fn read_config_file(path: &std::path::Path) -> SourceEntry {
 }
 
 /// Canonical config file path by platform (§9.4).
+///
+/// - **Windows:** `%PROGRAMDATA%\TCATimer\config.json`
+///   (`C:\ProgramData\TCATimer\config.json` by default).
+/// - **macOS:** `/Library/Application Support/TCATimer/config.json` —
+///   the system-wide "Application Support" location appropriate for a
+///   venue-provisioned machine.
+/// - **Linux / other Unix:** `/etc/tca-timer/config.json`.
 pub fn default_config_file_path() -> PathBuf {
     #[cfg(windows)]
     {
@@ -251,7 +259,11 @@ pub fn default_config_file_path() -> PathBuf {
             .unwrap_or_else(|_| "C:/ProgramData".to_string());
         PathBuf::from(programdata).join("TCATimer").join("config.json")
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/Library/Application Support/TCATimer/config.json")
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         PathBuf::from("/etc/tca-timer/config.json")
     }
@@ -587,6 +599,35 @@ mod tests {
         assert_eq!(
             url,
             "wss://timer.tcanationals.com/contestant?room=nationals-2026&id=contestant-07&token=hunter2"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_default_config_path_is_library_application_support() {
+        let p = default_config_file_path();
+        assert_eq!(
+            p,
+            std::path::PathBuf::from(
+                "/Library/Application Support/TCATimer/config.json"
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_default_config_path_uses_programdata() {
+        let p = default_config_file_path();
+        assert!(p.ends_with("TCATimer/config.json") || p.ends_with("TCATimer\\config.json"));
+    }
+
+    #[test]
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    fn linux_default_config_path_is_etc_tca_timer() {
+        let p = default_config_file_path();
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/etc/tca-timer/config.json"),
         );
     }
 

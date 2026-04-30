@@ -42,7 +42,9 @@ the first non-empty source per key, in priority order:
 1. Command-line flags: `--room <id>`, `--room-token <token>`, `--server <host>`.
 2. Windows registry: `HKLM\Software\TCANationals\Timer\Room`, `\RoomToken`, `\Server` (REG_SZ).
 3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
-   `/etc/tca-timer/config.json` on Unix. JSON keys: `room`, `roomToken`, `server`.
+   `/Library/Application Support/TCATimer/config.json` on macOS, and
+   `/etc/tca-timer/config.json` on Linux. JSON keys: `room`, `roomToken`,
+   `server`.
 4. Environment variables: `TCA_TIMER_ROOM`, `TCA_TIMER_ROOM_TOKEN`, `TCA_TIMER_SERVER`.
 
 `serverHost` defaults to **`timer.tcanationals.com`** when no source supplies
@@ -98,7 +100,22 @@ Both the listener in `ipc-server` and the client in `ctl` compute the
 name with the same logic against the same environment, so they always
 agree without any configuration.
 
-## Linux system deps for Tauri
+## Supported hosts
+
+The overlay is primarily deployed on Windows 11 x64 VMs (§9.1), but the
+codebase also builds and runs on macOS and Linux so contributors on those
+platforms can hack on it locally without a Windows VM.
+
+| Platform | Config file                                         | Preferences file                      | IPC transport                          |
+| :------- | :-------------------------------------------------- | :------------------------------------ | :------------------------------------- |
+| Windows  | `%PROGRAMDATA%\TCATimer\config.json`                | `%USERPROFILE%\.tcatimer\...`         | Named pipe (scoped per session + user) |
+| macOS    | `/Library/Application Support/TCATimer/config.json` | `~/.tcatimer/preferences.json`        | Unix domain socket (`/tmp/tca-timer-<user>/tca-timer.sock`) |
+| Linux    | `/etc/tca-timer/config.json`                        | `~/.tcatimer/preferences.json`        | Unix domain socket (`$XDG_RUNTIME_DIR/tca-timer.sock` or `/tmp/...`) |
+
+On macOS the app runs as an "Accessory" (agent) activation policy — no
+Dock icon, no menu-bar takeover — mirroring `skipTaskbar` on Windows.
+
+### Linux system deps for Tauri
 
 On Linux the Tauri crate needs the system libs below; the Desktop CI job
 installs them automatically:
@@ -108,10 +125,14 @@ sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev \
   libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
 ```
 
-## Tauri build (requires Rust toolchain + Windows host)
+macOS and Windows pick up their WebView deps from the OS itself.
+
+## Tauri build
 
 ```bash
-npm run tauri build
+npm run tauri build   # .msi on Windows, .app/.dmg on macOS, AppImage/deb on Linux
 ```
 
-The CI cross-builds the MSI artifact via `tauri-apps/tauri-action` (§9.1).
+The Windows MSI is the official artifact per §9.1; the macOS `.app`
+bundle is provided for local development and is not yet signed or
+notarized (the contest environment runs on Windows).

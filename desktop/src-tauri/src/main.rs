@@ -268,13 +268,21 @@ fn main() {
     let initial_corner = b.prefs.position.corner;
     let prefs_action_log = format!("{:?}", b.prefs_action);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
-        }))
+        }));
+
+    // On macOS the app is agent-mode: no Dock icon, no menu-bar takeover —
+    // only the status-bar tray and the overlay window itself. This mirrors
+    // the `skipTaskbar` behavior we get on Windows for free.
+    #[cfg(target_os = "macos")]
+    let builder = builder.activation_policy(tauri::ActivationPolicy::Accessory);
+
+    builder
         .manage(ManagedBootstrap(Mutex::new(b)))
         .invoke_handler(tauri::generate_handler![get_bootstrap, save_preferences])
         .setup(move |app| {
