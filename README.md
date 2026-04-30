@@ -11,7 +11,11 @@ work plugs into.
 
 ```
 tca-timer/
-├── .github/workflows/   # server / spa / desktop CI (§14.1)
+├── .github/workflows/   # server / spa / desktop / shared CI (§14.1)
+├── shared/              # Pure-TS module shared by the spa + desktop
+│                        # render layers (timer math, formatter, color
+│                        # priority table, §6.3 OffsetTracker). No
+│                        # runtime deps.
 ├── server/              # §11 — Node.js + Fastify + ws backend
 ├── spa/                 # §10 — React + Vite judge web app
 └── desktop/             # §9  — Tauri 2 contestant overlay
@@ -19,6 +23,12 @@ tca-timer/
 
 Each subdirectory has its own README describing what has been stubbed and
 the spec section(s) that still need to be implemented.
+
+Both `desktop/` and `spa/` consume `@tca-timer/shared` via a `file:../shared`
+dependency, so any change to the shared package is picked up by both
+consumers without a publish step. The CI workflow for either consumer is
+also triggered on `shared/**` changes so a regression in the shared
+module fails the right matrix.
 
 ## Common commands
 
@@ -64,6 +74,7 @@ deployment continues to go through Railway (`server/railway.json`).
 
 | Component | Lint | Test | Notes |
 | --------- | ---- | ---- | ----- |
+| shared    | `tsc --noEmit` | `vitest` | Pure-TS render-side timer math (§6.3 / §6.5 `computeRemainingMs`), digit formatter (§9.2.4 / §10.5 `formatCountdown` + `formatMs`), color/outline/pulse priority table (`countdownStyle`), and §6.3 `OffsetTracker`. Consumed by both desktop and spa. |
 | server    | `tsc --noEmit` | `node --test` | Fastify + `ws` backend with timer/help-queue state machines, full wire protocol, CF Access JWT + ticket cache, bcrypt room tokens, Twilio + SES adapters with quiet-hours/auto-cancel dispatcher, `pg` DAL + SQL migrations, audit-log retention, clock-drift sampler. |
-| spa       | `tsc -b --noEmit` | `vitest` | React app w/ routing + pages, `computeRemainingMs` helper, PWA plugin, CountdownWithBorder stub. |
-| desktop   | `tsc -b --noEmit` + `cargo clippy` | `vitest` + `cargo test` | Vite+React overlay (§9.2 colors/borders, §6.3 time-sync, §9.5 preferences), Tauri 2 shell with tray menu + single-instance + config resolution (§9.4, default host `timer.tcanationals.com`), OS-agnostic local-socket IPC (`ipc-proto` + `ipc-server` + `ctl`). |
+| spa       | `tsc -b --noEmit` | `vitest` | React app w/ routing + pages, `@tca-timer/shared` for §6.3 timer math + §10.5 formatter + §9.2.4 color priority, PWA plugin, CountdownWithBorder. |
+| desktop   | `tsc -b --noEmit` + `cargo clippy` | `vitest` + `cargo test` | Vite+React overlay (`@tca-timer/shared` for §9.2.4 colors / §10.5 formatter / §6.3 timer math + offset tracker; §9.5 alarm/flash and preferences kept local), Tauri 2 shell with tray menu + single-instance + config resolution (§9.4, default host `timer.tcanationals.com`), OS-agnostic local-socket IPC (`ipc-proto` + `ipc-server` + `ctl`). |

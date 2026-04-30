@@ -6,10 +6,12 @@ on:
     tags: ['v*']
     paths:
       - 'desktop/**'
+      - 'shared/**'
       - '.github/workflows/desktop.yml'
   pull_request:
     paths:
       - 'desktop/**'
+      - 'shared/**'
       - '.github/workflows/desktop.yml'
 
 jobs:
@@ -25,6 +27,13 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
+      # `desktop/` consumes `@tca-timer/shared` via a `file:../shared`
+      # link, so the shared package's own `node_modules` (vitest +
+      # typescript) must be installed before the desktop install
+      # runs; otherwise npm's reify of the linked dep fails.
+      - name: Install shared package
+        working-directory: shared
+        run: npm ci || npm install
       - run: npm ci || npm install
       - run: npm run lint
       - run: npm test
@@ -71,9 +80,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-      # `tauri::generate_context!` reads the `frontendDist` path (`../dist`)
-      # at compile time, so we must produce the Vite bundle before running
-      # any Rust commands that touch the `tca-timer-desktop` crate.
+      # `tauri::generate_context!` reads the `frontendDist` path
+      # (`../dist`) at compile time, so we must produce the Vite
+      # bundle before running any Rust commands that touch the
+      # `tca-timer-desktop` crate. The desktop install resolves a
+      # `file:../shared` link, so the shared package needs its own
+      # `npm install` first.
+      - name: Install shared package
+        working-directory: shared
+        run: npm ci || npm install
       - name: Build frontend bundle for Tauri context
         run: |
           npm ci || npm install

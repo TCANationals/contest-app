@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'spa/**'
+      - 'shared/**'
       - '.github/workflows/spa.yml'
   pull_request:
     paths:
       - 'spa/**'
+      - 'shared/**'
       - '.github/workflows/spa.yml'
 
 jobs:
@@ -24,6 +26,17 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: spa/package-lock.json
+      # `spa/` consumes `@tca-timer/shared` via a `file:../shared`
+      # link. The SPA only imports source TS files from the linked
+      # package (no transitive runtime deps), so the SPA's own
+      # `npm ci` happens to succeed without ever installing
+      # `shared/`'s devDeps — but mirroring the desktop workflow's
+      # explicit install step keeps the two consumer jobs symmetric
+      # and guards against future npm versions tightening reify of
+      # `file:` links.
+      - name: Install shared package
+        working-directory: shared
+        run: npm ci || npm install
       - run: npm ci || npm install
       - run: npm run lint
       - run: npm test

@@ -1,72 +1,11 @@
+// `computeRemainingMs` is now exercised in the shared package
+// (`shared/test/compute.test.ts`). The desktop-specific alarm and
+// flash decisions stay covered here because they only ship in the
+// overlay (§9.5).
+
 import { describe, it, expect } from 'vitest';
 
-import {
-  computeRemainingMs,
-  shouldFireAlarm,
-  shouldFlash,
-} from '../src/timer';
-import type { TimerState } from '../src/types';
-
-function baseState(overrides: Partial<TimerState> = {}): TimerState {
-  return {
-    room: 'r',
-    version: 1,
-    status: 'idle',
-    endsAtServerMs: null,
-    remainingMs: null,
-    message: '',
-    setBySub: 'x',
-    setByEmail: 'x@example.com',
-    setAtServerMs: 0,
-    ...overrides,
-  };
-}
-
-describe('computeRemainingMs', () => {
-  it('returns 0 when idle', () => {
-    expect(computeRemainingMs(baseState(), 0, 1_000)).toBe(0);
-  });
-
-  it('returns remainingMs when paused', () => {
-    expect(
-      computeRemainingMs(
-        baseState({ status: 'paused', remainingMs: 12_345 }),
-        123,
-        0,
-      ),
-    ).toBe(12_345);
-  });
-
-  it('applies the active offset to running endsAtServerMs', () => {
-    // Client wall clock is 5 s ahead of server; offset is -5_000 ms.
-    const endsAt = 100_000;
-    const now = 120_000;
-    const rem = computeRemainingMs(
-      baseState({ status: 'running', endsAtServerMs: endsAt }),
-      -5_000,
-      now,
-    );
-    expect(rem).toBe(-15_000 < 0 ? 0 : 0); // serverNow = 115_000 > endsAt → 0
-  });
-
-  it('clamps negative to zero', () => {
-    const rem = computeRemainingMs(
-      baseState({ status: 'running', endsAtServerMs: 1_000 }),
-      0,
-      5_000,
-    );
-    expect(rem).toBe(0);
-  });
-
-  it('returns positive time when server endpoint is in the future', () => {
-    const rem = computeRemainingMs(
-      baseState({ status: 'running', endsAtServerMs: 10_000 }),
-      0,
-      7_000,
-    );
-    expect(rem).toBe(3_000);
-  });
-});
+import { shouldFireAlarm, shouldFlash } from '../src/timer';
 
 describe('shouldFireAlarm', () => {
   const base = {
