@@ -5,11 +5,8 @@
 
 use std::sync::Arc;
 
-use tca_timer_ipc_server::{start, PlaceholderHandler};
+use tca_timer_ipc_server::{start, Handler};
 
-pub fn run() {
-    // TODO(§9.6.2): replace `PlaceholderHandler` with one that forwards into
-    // the real overlay state (Tauri window API for show/hide, WS client for
-    // HELP_REQUEST / HELP_CANCEL with offline queueing).
-    start(Arc::new(PlaceholderHandler));
+pub fn run<H: Handler>(handler: Arc<H>) {
+    start(handler);
 }
