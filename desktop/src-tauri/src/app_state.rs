@@ -131,7 +131,11 @@ impl AppState {
         // response reflects the caller's intent immediately.
         let (status, report_connected) = {
             let g = self.inner.lock().expect("AppState poisoned");
-            if g.help_pending {
+            // Dedup against BOTH on-wire pending and offline-queued
+            // requests — /status reports them together as
+            // `help_pending`, so the IPC surface must treat them
+            // together for the "already asked" guard too.
+            if g.help_pending || g.help_queued_offline {
                 return HelpRequestStatus::AlreadyPending;
             }
             let connected = g.connected;
@@ -279,6 +283,31 @@ mod tests {
         // /status reports pending-or-queued as true so callers see a
         // single "you already asked for help" state.
         assert!(state.snapshot().help_pending);
+    }
+
+    #[test]
+    fn repeated_help_request_while_offline_queue_pending_is_idempotent() {
+        // First call offline → QueuedOffline + one emit.
+        // Second call while still queued must return AlreadyPending
+        // and MUST NOT emit another send-help-request event.
+        let spy = Spy::new();
+        let state = state_with(&spy);
+        assert!(matches!(
+            state.help_request(),
+            HelpRequestStatus::QueuedOffline,
+        ));
+        assert_eq!(spy.help_requests.load(Ordering::SeqCst), 1);
+        assert!(state.snapshot().help_pending);
+
+        assert!(matches!(
+            state.help_request(),
+            HelpRequestStatus::AlreadyPending,
+        ));
+        assert_eq!(
+            spy.help_requests.load(Ordering::SeqCst),
+            1,
+            "offline-queued request must dedup like an on-wire pending one",
+        );
     }
 
     #[test]
