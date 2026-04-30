@@ -12,12 +12,17 @@ use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
 use interprocess::local_socket::{ListenerOptions, Stream};
 
 use tca_timer_ipc_proto::{
-    decode_response, encode_request, socket_name, HelpRequestStatus, Request, Response,
+    decode_response, encode_request, socket_name, socket_parent_dir, HelpRequestStatus, Request,
+    Response,
 };
-use tca_timer_ipc_server::{handle_connection, PlaceholderHandler};
+use tca_timer_ipc_server::{ensure_private_dir, handle_connection, PlaceholderHandler};
 
 #[test]
 fn ctl_and_server_can_talk_over_local_socket() {
+    if let Some(dir) = socket_parent_dir() {
+        ensure_private_dir(&dir).expect("prepare runtime dir");
+    }
+
     let name = socket_name().expect("socket name resolves");
     let listener = ListenerOptions::new()
         .name(name)

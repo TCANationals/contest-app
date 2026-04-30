@@ -18,8 +18,8 @@ use interprocess::local_socket::traits::ListenerExt as _;
 use interprocess::local_socket::{ListenerOptions, Stream};
 
 use tca_timer_ipc_proto::{
-    decode_request, encode_response, socket_name, HelpCancelStatus, HelpRequestStatus, Request,
-    Response, StatusSnapshot,
+    decode_request, encode_response, socket_name, socket_parent_dir, HelpCancelStatus,
+    HelpRequestStatus, Request, Response, StatusSnapshot,
 };
 
 /// Bridges IPC commands to the overlay's state. The Tauri side implements
@@ -76,6 +76,20 @@ pub fn start<H: Handler>(handler: Arc<H>) {
 }
 
 fn run<H: Handler>(handler: Arc<H>) {
+    // Ensure the parent runtime directory exists and is private to this
+    // user (§9.6, RDP/terminal-server scoping). On `$XDG_RUNTIME_DIR` the
+    // directory already exists with 0700 courtesy of systemd; on the
+    // `/tmp/tca-timer-<user>/` fallback we must create it ourselves.
+    if let Some(dir) = socket_parent_dir() {
+        if let Err(err) = ensure_private_dir(&dir) {
+            eprintln!(
+                "tca-timer-ipc: failed to prepare runtime directory {}: {err}",
+                dir.display()
+            );
+            return;
+        }
+    }
+
     let name = match socket_name() {
         Ok(n) => n,
         Err(err) => {
@@ -129,6 +143,24 @@ pub fn handle_connection<H: Handler + ?Sized>(handler: &H, stream: Stream) {
         eprintln!("tca-timer-ipc: write failed: {err}");
     }
     let _ = writer.flush();
+}
+
+/// Create `dir` if missing and enforce mode `0700` on Unix. No-op on
+/// Windows (where per-pipe ACLs are applied by the kernel on open).
+pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir_all(dir)?;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(windows)]
+    {
+        let _ = dir;
+    }
+    Ok(())
 }
 
 /// Public for testing: pure function mapping a request to a response via
@@ -227,6 +259,30 @@ mod tests {
         assert!(snap.connected);
         assert!(!snap.visible);
         assert!(snap.help_pending);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_private_dir_sets_0700_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "tca-timer-ipc-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        super::ensure_private_dir(&tmp).expect("creates dir");
+        let meta = std::fs::metadata(&tmp).expect("stat ok");
+        let mode = meta.permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "dir must be 0700, got {:o}", mode);
+
+        // Re-running must be idempotent.
+        super::ensure_private_dir(&tmp).expect("idempotent");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

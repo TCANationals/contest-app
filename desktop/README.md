@@ -20,6 +20,9 @@ src-tauri/           Rust host
   tauri.conf.json
 ipc-proto/           Shared Request/Response + socket-name helper used by
                      both src-tauri and ctl. Newline-delimited JSON framing.
+                     Socket name is scoped per interactive session so RDP /
+                     terminal-server hosts with multiple simultaneous users
+                     don't collide (see "Multi-user / RDP" below).
 ctl/                 tca-timer-ctl.exe — desktop-shortcut CLI helper (§9.6.3)
   src/main.rs
   Cargo.toml
@@ -51,6 +54,30 @@ cargo clippy --workspace --all-targets -- -D warnings
 The `ipc-server` tests include a real-socket loopback that spins up the
 listener and drives it with a `ctl`-style client, so the OS-agnostic
 transport is exercised end-to-end.
+
+## Multi-user / RDP
+
+Contestant VMs may run inside Remote Desktop Services or other
+terminal-server environments where multiple users are logged into the
+same machine at once. The IPC socket name is scoped per-session so the
+`ctl` helper always talks to its own user's app instance:
+
+- **Windows:** the named pipe name is
+  `tca-timer-<SESSIONNAME>-<USERNAME>.sock` (e.g.
+  `tca-timer-RDP-Tcp#0-alice.sock`). `SESSIONNAME` is `Console` for a
+  local login and something like `RDP-Tcp#0` for RDP logins. Unsafe
+  characters are sanitized to `_`.
+- **Linux / macOS:** the socket is created under `$XDG_RUNTIME_DIR` when
+  available (systemd provides that per-user, mode `0700`). If
+  `XDG_RUNTIME_DIR` is missing the listener falls back to
+  `/tmp/tca-timer-<user>/tca-timer.sock` and creates the parent
+  directory itself with mode `0700` so only the owning user can reach it.
+
+Both the listener in `ipc-server` and the client in `ctl` compute the
+name with the same logic against the same environment, so they always
+agree without any configuration.
+
+## Linux system deps for Tauri
 
 On Linux the Tauri crate needs the system libs below; the Desktop CI job
 installs them automatically:

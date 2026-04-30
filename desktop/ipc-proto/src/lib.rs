@@ -9,6 +9,26 @@
 //! UTF-8 JSON terminated by `\n`; each response is the same. Only one
 //! request/response is exchanged per connection — the ctl helper opens the
 //! socket, writes one line, reads one line, and exits.
+//!
+//! ## Per-user / per-session scoping
+//!
+//! Desktops in RDP / terminal-server environments routinely have multiple
+//! interactive users logged into one host simultaneously. The ctl helper
+//! MUST talk to **its own user's** app instance, never someone else's. The
+//! socket name is therefore scoped so it is unique per interactive session:
+//!
+//! - **Windows:** named pipes live in a single machine-global namespace, so
+//!   the pipe name itself includes the session name (`SESSIONNAME`, e.g.
+//!   `Console`, `RDP-Tcp#0`) and the username (`USERNAME`). Windows ACLs on
+//!   the pipe further limit access to the creating user.
+//! - **Unix:** sockets are filesystem objects, so we place them under
+//!   `$XDG_RUNTIME_DIR` when available (systemd creates that directory per
+//!   user with mode `0700`). When it is missing we fall back to
+//!   `/tmp/tca-timer-<user>/tca-timer.sock`, with the listener creating
+//!   the subdirectory as `0700`.
+//!
+//! Both the server and the ctl helper compute the name with the same logic
+//! against the same environment, so they always agree.
 
 #[cfg(windows)]
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
@@ -17,31 +37,121 @@ use interprocess::local_socket::{GenericFilePath, ToFsName};
 
 use serde::{Deserialize, Serialize};
 
-/// Logical name used to connect to the desktop app's local IPC endpoint.
-///
-/// On Windows this is resolved to a named pipe at `\\.\pipe\tca-timer.sock`
-/// via the `GenericNamespaced` namespace. On Unix it is resolved to a
-/// filesystem-path Unix domain socket at `/tmp/tca-timer.sock` via the
-/// `GenericFilePath` namespace.
-pub const SOCKET_NAME: &str = "tca-timer.sock";
+/// Base identifier for our socket. Session / user qualifiers are appended
+/// by [`resolve_socket_name`] so RDP-style multi-user hosts get one
+/// instance per logged-in user without collisions.
+pub const SOCKET_BASENAME: &str = "tca-timer";
 
-/// Resolve [`SOCKET_NAME`] to a platform-appropriate [`Name`].
+/// Compute the **name string** that will be used for the local socket on
+/// this session, without resolving it into an `interprocess::Name`.
 ///
-/// Returns an owned [`Name<'static>`] so callers can pass it to
-/// [`interprocess::local_socket::traits::Stream::connect`] /
-/// [`interprocess::local_socket::traits::ListenerOptions::name`] without
-/// worrying about borrow scope.
+/// Exposed separately so the listener can use the parent directory to
+/// enforce `0700` on Unix fallbacks, and so tests can compare names.
+pub fn socket_name_string() -> String {
+    compute_name_string(&EnvSource::live())
+}
+
+/// Resolve [`socket_name_string`] to a platform-appropriate
+/// [`interprocess::local_socket::Name<'static>`].
 pub fn socket_name() -> std::io::Result<interprocess::local_socket::Name<'static>> {
+    let name = compute_name_string(&EnvSource::live());
+    resolve_name(&name)
+}
+
+fn resolve_name(name: &str) -> std::io::Result<interprocess::local_socket::Name<'static>> {
     #[cfg(windows)]
     {
-        SOCKET_NAME.to_ns_name::<GenericNamespaced>()
+        name.to_owned().to_ns_name::<GenericNamespaced>()
     }
     #[cfg(not(windows))]
     {
-        // `/tmp/tca-timer.sock` — the desktop app owns this path. The CLI
-        // helper only connects; it never creates or unlinks the file.
-        let path = std::path::PathBuf::from("/tmp").join(SOCKET_NAME);
-        path.to_fs_name::<GenericFilePath>()
+        // Treat `name` as an absolute filesystem path on Unix. On Windows it
+        // is the raw pipe basename.
+        std::path::PathBuf::from(name).to_fs_name::<GenericFilePath>()
+    }
+}
+
+/// Environment lookups, extracted so tests can inject deterministic values
+/// without mutating the real process environment.
+#[derive(Clone, Debug)]
+struct EnvSource {
+    /// `%SESSIONNAME%` — only meaningful on Windows, where named-pipe names
+    /// must include it to distinguish RDP sessions.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    session: Option<String>,
+    /// `%USERNAME%` / `$USER`.
+    user: Option<String>,
+    /// `$XDG_RUNTIME_DIR` — only consulted on Unix.
+    #[cfg_attr(windows, allow(dead_code))]
+    xdg_runtime_dir: Option<String>,
+}
+
+impl EnvSource {
+    fn live() -> Self {
+        Self {
+            session: std::env::var("SESSIONNAME").ok(),
+            user: std::env::var("USERNAME")
+                .ok()
+                .or_else(|| std::env::var("USER").ok()),
+            xdg_runtime_dir: std::env::var("XDG_RUNTIME_DIR").ok(),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn compute_name_string(env: &EnvSource) -> String {
+    // Named-pipe name — must be valid as a pipe path component: no `\` or
+    // null bytes. Sanitize aggressively to be safe.
+    let session = sanitize(env.session.as_deref().unwrap_or("Console"));
+    let user = sanitize(env.user.as_deref().unwrap_or("default"));
+    format!("{SOCKET_BASENAME}-{session}-{user}.sock")
+}
+
+#[cfg(not(windows))]
+fn compute_name_string(env: &EnvSource) -> String {
+    // Prefer the per-user runtime directory that systemd creates with mode
+    // 0700. This is the canonical home for user-scoped sockets on Linux.
+    if let Some(dir) = env.xdg_runtime_dir.as_deref() {
+        if !dir.is_empty() {
+            return format!("{dir}/{SOCKET_BASENAME}.sock");
+        }
+    }
+    // Fallback: /tmp/tca-timer-<user>/tca-timer.sock. The listener locks
+    // this down to mode 0700 when it creates the subdirectory.
+    let user = sanitize(env.user.as_deref().unwrap_or("default"));
+    format!(
+        "/tmp/{base}-{user}/{base}.sock",
+        base = SOCKET_BASENAME,
+        user = user
+    )
+}
+
+/// Permit ASCII alphanumerics plus `_-.`; everything else becomes `_`.
+fn sanitize(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The parent directory the listener must create (with `0700` on Unix)
+/// before binding. Returns `None` if the socket's name is not a filesystem
+/// path (Windows).
+pub fn socket_parent_dir() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::Path::new(&socket_name_string())
+            .parent()
+            .map(std::path::Path::to_path_buf)
     }
 }
 
@@ -131,6 +241,14 @@ fn trim_trailing_newline(bytes: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
 
+    fn env(session: Option<&str>, user: Option<&str>, xdg: Option<&str>) -> EnvSource {
+        EnvSource {
+            session: session.map(ToOwned::to_owned),
+            user: user.map(ToOwned::to_owned),
+            xdg_runtime_dir: xdg.map(ToOwned::to_owned),
+        }
+    }
+
     #[test]
     fn request_round_trip() {
         for req in [
@@ -186,8 +304,67 @@ mod tests {
 
     #[test]
     fn socket_name_resolves_on_current_platform() {
-        // Just ensure the resolver returns Ok on the host we build on; the
-        // returned `Name` carries no user-visible identifier to compare to.
         let _ = socket_name().expect("socket name resolves");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_names_are_unique_per_session_and_user() {
+        let a = compute_name_string(&env(Some("Console"), Some("alice"), None));
+        let b = compute_name_string(&env(Some("Console"), Some("bob"), None));
+        let c = compute_name_string(&env(Some("RDP-Tcp#0"), Some("alice"), None));
+        let d = compute_name_string(&env(Some("RDP-Tcp#1"), Some("alice"), None));
+        assert_ne!(a, b, "different users must get distinct pipes");
+        assert_ne!(a, c, "different sessions must get distinct pipes");
+        assert_ne!(c, d, "different RDP sessions must get distinct pipes");
+        assert!(a.contains("Console") && a.contains("alice"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sanitizes_unsafe_chars() {
+        let n = compute_name_string(&env(Some("RDP\\Tcp 0"), Some("ali\\ce"), None));
+        assert!(!n.contains('\\'), "backslashes must be removed: {n}");
+        assert!(!n.contains(' '), "spaces must be removed: {n}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_falls_back_when_env_missing() {
+        let n = compute_name_string(&env(None, None, None));
+        assert!(n.contains("Console") && n.contains("default"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_prefers_xdg_runtime_dir() {
+        let a = compute_name_string(&env(None, Some("alice"), Some("/run/user/1000")));
+        assert_eq!(a, "/run/user/1000/tca-timer.sock");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_falls_back_per_user_under_tmp() {
+        let a = compute_name_string(&env(None, Some("alice"), None));
+        let b = compute_name_string(&env(None, Some("bob"), None));
+        let c = compute_name_string(&env(None, Some("alice"), Some("")));
+        assert_eq!(a, "/tmp/tca-timer-alice/tca-timer.sock");
+        assert_ne!(a, b, "different users must get distinct paths");
+        assert_eq!(
+            c, a,
+            "empty XDG_RUNTIME_DIR must be treated as absent"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_fallback_matches_parent_dir() {
+        let name = compute_name_string(&env(None, Some("alice"), None));
+        let parent = std::path::Path::new(&name)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(parent, "/tmp/tca-timer-alice");
     }
 }
