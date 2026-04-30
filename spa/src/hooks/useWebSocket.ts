@@ -197,10 +197,6 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
         !closedRef.current
       ) {
         attemptRef.current = 0;
-        if (timersRef.current.reconnect) {
-          window.clearTimeout(timersRef.current.reconnect);
-          timersRef.current.reconnect = undefined;
-        }
         // Tear down any in-progress (CONNECTING) or otherwise-not-OPEN socket
         // first. Detach it from socketRef BEFORE close() so the orphan's
         // open/message/close handlers all short-circuit via the `isCurrent`
@@ -215,6 +211,11 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
             /* noop */
           }
         }
+        // Clear ALL existing timers (reconnect, pingIv, warm). Without this
+        // the previous socket's 30s ping interval and warm-up timeouts keep
+        // firing — and the new socket's `open` handler would silently
+        // overwrite the timer refs, leaking the prior intervals forever.
+        cleanupTimers();
         void connect();
       }
     };
