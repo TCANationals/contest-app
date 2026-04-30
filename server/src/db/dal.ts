@@ -470,37 +470,73 @@ export function pruneAuditLog(olderThanMs: number): Promise<number> {
 
 // ---------------------------------------------------------------------------
 // Retry ring buffer (§11.5)
+//
+// Failed DB writes are parked here so the WebSocket broadcast path never
+// stalls. A background drain (see `startRetryDrain`) attempts to re-run
+// every pending job periodically. Persistently broken jobs (e.g., a FK
+// violation because a room was deleted after the write was enqueued)
+// MUST NOT block the rest of the ring — after `MAX_ATTEMPTS` failures
+// the offending job is dropped to a dead-letter counter and drained via
+// the structured logger instead. That way, `isDbDegraded()` can recover
+// even when a poison-pill write lands at the head.
 // ---------------------------------------------------------------------------
 
 export type RetryJob = () => Promise<void>;
 
-const MAX_RING = 1000;
-const ring: RetryJob[] = [];
+interface RingEntry {
+  job: RetryJob;
+  attempts: number;
+  label?: string;
+}
+
+export const MAX_RING = 1000;
+export const MAX_ATTEMPTS = 5;
+
+const ring: RingEntry[] = [];
 let degradedUntil = 0;
+let deadLettered = 0;
 
 export function isDbDegraded(now: number = Date.now()): boolean {
   return degradedUntil > now || ring.length > 0;
 }
 
-export function enqueueRetry(job: RetryJob): void {
+export function enqueueRetry(job: RetryJob, label?: string): void {
   if (ring.length >= MAX_RING) {
     ring.shift();
   }
-  ring.push(job);
+  ring.push({ job, attempts: 0, label });
   degradedUntil = Date.now() + 30_000;
 }
 
-export async function flushRetries(log?: (msg: string, err?: unknown) => void): Promise<number> {
+/**
+ * Attempt every pending job once. Jobs that throw are pushed to the tail
+ * of the ring with an incremented attempt count; after `MAX_ATTEMPTS`
+ * failures they are dead-lettered. This prevents a single permanently
+ * broken job from blocking every subsequent write. Returns the number of
+ * jobs that succeeded during this drain pass.
+ */
+export async function flushRetries(
+  log?: (msg: string, err?: unknown) => void,
+): Promise<number> {
   let flushed = 0;
-  while (ring.length > 0) {
-    const job = ring.shift()!;
+  const pending = ring.length;
+  for (let i = 0; i < pending; i++) {
+    const entry = ring.shift();
+    if (!entry) break;
     try {
-      await job();
+      await entry.job();
       flushed += 1;
     } catch (err) {
-      ring.unshift(job);
-      if (log) log('retry_flush_stalled', err);
-      break;
+      entry.attempts += 1;
+      if (entry.attempts >= MAX_ATTEMPTS) {
+        deadLettered += 1;
+        if (log) log('retry_dead_lettered', { err, label: entry.label, attempts: entry.attempts });
+      } else {
+        // Requeue at the tail so unrelated jobs can make progress while
+        // this one is still failing.
+        ring.push(entry);
+        if (log) log('retry_requeued', { err, label: entry.label, attempts: entry.attempts });
+      }
     }
   }
   if (ring.length === 0) degradedUntil = 0;
@@ -511,7 +547,12 @@ export function ringSize(): number {
   return ring.length;
 }
 
+export function deadLetterCount(): number {
+  return deadLettered;
+}
+
 export function _resetRing(): void {
   ring.length = 0;
   degradedUntil = 0;
+  deadLettered = 0;
 }

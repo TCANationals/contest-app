@@ -14,6 +14,8 @@ import {
   flushRetries,
   isDbDegraded,
   ringSize,
+  deadLetterCount,
+  MAX_ATTEMPTS,
   _resetRing,
 } from '../src/db/dal.js';
 import { startRetryDrain } from '../src/db/retry-drain.js';
@@ -46,7 +48,7 @@ describe('retry ring drain (§11.5)', () => {
     assert.equal(isDbDegraded(), false);
   });
 
-  it('flushRetries stops at the first failure, leaving the job at the head', async () => {
+  it('a failing job does not block later jobs in the ring', async () => {
     _resetRing();
     let succeeded = 0;
     enqueueRetry(async () => {
@@ -60,10 +62,32 @@ describe('retry ring drain (§11.5)', () => {
     });
 
     const flushed = await flushRetries();
-    assert.equal(flushed, 1); // only the first job ran
-    assert.equal(succeeded, 1);
-    assert.equal(ringSize(), 2); // failing job is still at the head
+    // Two healthy jobs must have executed even though a broken job was
+    // interleaved between them. Previously, the drain would abort at the
+    // first failure and leave the tail stuck behind the broken job.
+    assert.equal(flushed, 2);
+    assert.equal(succeeded, 2);
+    // The broken job is still on the ring, requeued at the tail for
+    // another attempt on the next drain.
+    assert.equal(ringSize(), 1);
     assert.equal(isDbDegraded(), true);
+    _resetRing();
+  });
+
+  it('dead-letters a persistently broken job after MAX_ATTEMPTS and clears degraded state', async () => {
+    _resetRing();
+    const before = deadLetterCount();
+    enqueueRetry(async () => {
+      throw new Error('permanent');
+    }, 'poison');
+    const logs: Array<{ msg: string; extra: unknown }> = [];
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await flushRetries((m, e) => logs.push({ msg: m, extra: e }));
+    }
+    assert.equal(ringSize(), 0, 'poison pill must be evicted, not held forever');
+    assert.equal(deadLetterCount(), before + 1);
+    assert.equal(isDbDegraded(), false);
+    assert.ok(logs.some((l) => l.msg === 'retry_dead_lettered'));
     _resetRing();
   });
 
