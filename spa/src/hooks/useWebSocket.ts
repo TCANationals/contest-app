@@ -114,8 +114,17 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       const ws = new WebSocket(url);
       socketRef.current = ws;
 
+      // Every event handler short-circuits when this socket is no longer the
+      // tracked one. A foreground-reopen (or any other path that creates a
+      // replacement) leaves the old in-flight socket with a still-pending
+      // open/message/close event queue; without these guards, an orphan
+      // socket's `open` handler would overwrite the *new* connection's warm/
+      // ping timer refs and `message` would push duplicate STATE/HELP_QUEUE
+      // updates from two live sockets at once.
+      const isCurrent = () => socketRef.current === ws;
+
       ws.addEventListener('open', () => {
-        if (closedRef.current) return;
+        if (closedRef.current || !isCurrent()) return;
         attemptRef.current = 0;
         trackerRef.current.reset();
         setConnection('connected');
@@ -131,6 +140,7 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       });
 
       ws.addEventListener('message', (ev) => {
+        if (!isCurrent()) return;
         let frame: ServerFrame;
         try {
           frame = JSON.parse(ev.data as string) as ServerFrame;
@@ -157,13 +167,10 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       });
 
       ws.addEventListener('close', () => {
-        // A previously-replaced socket may close after a foreground-reopen has
-        // already attached fresh timers + a new socket to socketRef/timersRef.
-        // Only run the cleanup + reconnect path when *this* close event is
-        // for the currently-tracked socket; otherwise it would wipe the active
-        // connection's ping interval/warm-up timers and schedule a spurious
-        // reconnect.
-        if (socketRef.current !== ws) return;
+        // Mirrors the isCurrent() guard above: a stale socket's late close
+        // event MUST NOT clear the new active connection's timers or schedule
+        // a spurious reconnect.
+        if (!isCurrent()) return;
         socketRef.current = null;
         cleanupTimers();
         scheduleReconnect();
@@ -193,6 +200,20 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
         if (timersRef.current.reconnect) {
           window.clearTimeout(timersRef.current.reconnect);
           timersRef.current.reconnect = undefined;
+        }
+        // Tear down any in-progress (CONNECTING) or otherwise-not-OPEN socket
+        // first. Detach it from socketRef BEFORE close() so the orphan's
+        // open/message/close handlers all short-circuit via the `isCurrent`
+        // guard inside connect(); otherwise the orphan would later overwrite
+        // the fresh connection's timers and double-deliver STATE frames.
+        const stale = socketRef.current;
+        if (stale) {
+          socketRef.current = null;
+          try {
+            stale.close(1000, 'foreground-reopen');
+          } catch {
+            /* noop */
+          }
         }
         void connect();
       }
