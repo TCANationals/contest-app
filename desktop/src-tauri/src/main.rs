@@ -268,24 +268,25 @@ fn main() {
     let initial_corner = b.prefs.position.corner;
     let prefs_action_log = format!("{:?}", b.prefs_action);
 
-    let builder = tauri::Builder::default()
+    tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
-        }));
-
-    // On macOS the app is agent-mode: no Dock icon, no menu-bar takeover —
-    // only the status-bar tray and the overlay window itself. This mirrors
-    // the `skipTaskbar` behavior we get on Windows for free.
-    #[cfg(target_os = "macos")]
-    let builder = builder.activation_policy(tauri::ActivationPolicy::Accessory);
-
-    builder
+        }))
         .manage(ManagedBootstrap(Mutex::new(b)))
         .invoke_handler(tauri::generate_handler![get_bootstrap, save_preferences])
         .setup(move |app| {
+            // On macOS the app is agent-mode: no Dock icon, no menu-bar
+            // takeover — only the status-bar tray and the overlay window
+            // itself. This mirrors the `skipTaskbar` behavior we get on
+            // Windows for free. `set_activation_policy` is a no-op on
+            // other platforms per the tauri docs, but it only exists when
+            // compiling for macOS.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let handle = app.handle().clone();
 
             if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
