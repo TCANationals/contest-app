@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 
 use interprocess::local_socket::traits::ListenerExt as _;
-use interprocess::local_socket::{ListenerOptions, Stream};
+use interprocess::local_socket::{Listener, ListenerOptions, Name, Stream};
 
 use tca_timer_ipc_proto::{
     decode_request, encode_response, socket_name, socket_parent_dir, HelpCancelStatus,
@@ -98,13 +98,7 @@ fn run<H: Handler>(handler: Arc<H>) {
         }
     };
 
-    // `reclaim_name(true)` removes any stale socket file from a previous
-    // unclean shutdown before binding (Unix only; no-op on Windows).
-    let listener = match ListenerOptions::new()
-        .name(name)
-        .reclaim_name(true)
-        .create_sync()
-    {
+    let listener = match bind_listener(name) {
         Ok(l) => l,
         Err(err) => {
             eprintln!("tca-timer-ipc: bind failed: {err}");
@@ -118,6 +112,42 @@ fn run<H: Handler>(handler: Arc<H>) {
             Err(err) => eprintln!("tca-timer-ipc: accept failed: {err}"),
         }
     }
+}
+
+/// Bind the IPC listener, recovering from a stale socket file left by a
+/// previous unclean shutdown.
+///
+/// `reclaim_name(true)` only removes the socket file when **this**
+/// listener is dropped gracefully. If the previous app instance was
+/// SIGKILL'd / force-quit / OOM-killed / crashed, the file persists and
+/// the bind otherwise fails with `EADDRINUSE` (errno 48 on macOS, errno
+/// 98 on Linux). The user-visible symptom of that bug is:
+///
+/// ```text
+/// tca-timer-ipc: bind failed: Address already in use
+/// ```
+///
+/// followed by `tca-timer-ctl status` returning "Connection refused"
+/// because the socket file is on disk but no one is listening on it.
+///
+/// `try_overwrite(true)` handles exactly that case: on `EADDRINUSE` it
+/// deletes the existing socket file and retries the bind. It is safe to
+/// enable here because the desktop app uses
+/// `tauri-plugin-single-instance` upstream, which guarantees only one
+/// `tca-timer-desktop` process ever reaches this code path — so the
+/// file being overwritten cannot belong to a live sibling listener of
+/// our own.
+///
+/// On Windows this is a no-op (named pipes don't have a stale-file
+/// problem; `try_overwrite` is documented as a no-op there).
+///
+/// Public for testing.
+pub fn bind_listener(name: Name<'_>) -> std::io::Result<Listener> {
+    ListenerOptions::new()
+        .name(name)
+        .reclaim_name(true)
+        .try_overwrite(true)
+        .create_sync()
 }
 
 /// Public for testing: read one request from `stream`, dispatch via
