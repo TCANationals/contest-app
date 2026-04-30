@@ -1,0 +1,48 @@
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci || npm install
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  tauri-msi:
+    # TODO(§14.1): wire tauri-apps/tauri-action for MSI artifact + Release
+    # attachment. Disabled until icons / signing settings / workflow secrets
+    # are configured.
+    if: false
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          args: '--verbose'

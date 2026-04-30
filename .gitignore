@@ -135,3 +135,9 @@ Thumbs.db
 
 .aider*
 
+# Rust / Tauri build outputs
+target/
+
+# Vite build outputs
+**/dist/
+

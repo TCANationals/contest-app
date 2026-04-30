@@ -1,0 +1,39 @@
+name: server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci || npm install
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    # TODO(§14.1): wire Railway deploy (e.g. railway up) when ready. Disabled
+    # by default so the workflow is inert until secrets are provisioned.
+    if: false
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "deploy placeholder"

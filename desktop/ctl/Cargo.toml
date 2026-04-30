@@ -1,0 +1,15 @@
+[package]
+name = "tca-timer-ctl"
+version = "0.0.1"
+description = "Desktop shortcut CLI helper for TCA Timer (§9.6.3)."
+authors = ["TCANationals"]
+license = "MIT"
+edition = "2021"
+
+[[bin]]
+name = "tca-timer-ctl"
+path = "src/main.rs"
+
+[dependencies]
+# TODO(§9.6.3): add ureq (or similar) for the POST to 127.0.0.1:17380 and a
+# minimal Windows toast crate. Keep GUI subsystem; no console flash.
