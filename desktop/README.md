@@ -71,8 +71,26 @@ npm run build      # vite build
 ## Rust crates
 
 The Rust side is organized as a Cargo workspace (`desktop/Cargo.toml`) with
-a pinned toolchain in `desktop/rust-toolchain.toml` (latest stable — 1.95).
-Stable is required because Tauri 2's transitive deps use `edition2024`.
+a pinned toolchain in `desktop/rust-toolchain.toml` (Rust 1.95.0). rustup
+reads that file on every `cargo` invocation and will auto-install the
+pinned toolchain the first time you build, so contributors don't need to
+manage channels by hand.
+
+The pin is concrete (not `channel = "stable"`) because Tauri 2's
+transitive dependency graph has crates that opt into `edition2024`
+(`serde_spanned 1`, `toml 1`, `hashbrown 0.17`) as well as crates with
+newer `rust-version` floors (`serde_with 3.18`, `time 0.3.47`,
+`zbus 5.15`, the `icu_*` family). If you see either
+
+```
+feature `edition2024` is required
+package `<crate>@<ver>` cannot be built because it requires rustc …
+```
+
+from a `cargo`/`npm run tauri build`, your local toolchain is older than
+the pin — usually because rustup resolved `stable` to whatever was
+installed last time you ran `rustup update`. Run `rustup show` inside
+`desktop/` to force the pinned version to install, and retry.
 
 ```bash
 # From desktop/

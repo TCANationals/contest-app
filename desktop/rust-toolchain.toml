@@ -1,6 +1,22 @@
 [toolchain]
-# Latest stable as of 2026-04. Required so transitive deps that opt into
-# edition2024 (e.g. `hashbrown 0.17`, which Tauri 2 pulls in) compile.
-channel = "stable"
+# Pinned to a concrete version (not the floating `stable` channel) so rustup
+# auto-installs the correct toolchain on first build instead of re-using
+# whatever "stable" the developer happens to have sitting around locally.
+#
+# 1.95.0 is the version this workspace's locked dependency graph requires.
+# Tauri 2's transitive deps pull in crates that raise `rust-version` over
+# time — most recently `serde_with 3.18`, `time 0.3.47`, `zbus 5.15`, and
+# the `icu_*` family — so anything older fails with either:
+#
+#   feature `edition2024` is required                (pre-1.85 cargo)
+#   package `<crate>@<ver>` cannot be built …        (1.85–1.94 rustc)
+#
+# If you're seeing either of those from `cargo` / `npm run tauri build`,
+# your local toolchain is stale; `rustup show` inside `desktop/` will
+# install the pinned version automatically.
+#
+# Bump the pin when we need a newer feature; don't drop it back to
+# `"stable"` or contributors will silently skew again.
+channel = "1.95.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
