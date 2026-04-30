@@ -1,21 +1,26 @@
 # TCA Timer — Desktop
 
-Scaffolding for the contestant overlay described in `TCA_Timer_Design_Spec.docx.md` §9.
-
-All business logic is currently a placeholder.
+Contestant overlay described in `TCA_Timer_Design_Spec.docx.md` §9, built on Tauri 2.
 
 ## Layout
 
 ```
 src/                 Frontend (React + Vite) — display only
   main.tsx
-  Overlay.tsx
+  Overlay.tsx        Countdown digits, colors/borders (§9.2), flash/alarm
+  colors.ts          Color + contrast-border priority table (§9.2)
+  timer.ts           computeRemainingMs, alarm + flash decisions (§9.5)
+  timesync.ts        Sliding-median offset tracker (§6.3)
+  ws-client.ts       Contestant WebSocket client, warm-up + backoff (§6.4)
   format.ts
+  types.ts
 src-tauri/           Rust host
   src/
-    main.rs          Tauri shell + window setup (§9.2)
-    ipc_server.rs    Local IPC listener (§9.6) — Unix domain socket /
-                     Windows named pipe, via `interprocess`.
+    main.rs          Tauri shell, tray, single-instance, bootstrap command
+    config.rs        §9.4 config resolution: CLI / registry / file / env
+    preferences.rs   §9.5 local preferences: atomic writes, migration
+    app_state.rs     Shared overlay state consumed by IPC handler
+    ipc_server.rs    Thin wrapper around `tca-timer-ipc-server`
   Cargo.toml
   tauri.conf.json
 ipc-proto/           Shared Request/Response + socket-name helper used by
@@ -28,6 +33,22 @@ ctl/                 tca-timer-ctl.exe — desktop-shortcut CLI helper (§9.6.3)
   Cargo.toml
 Cargo.toml           Rust workspace covering src-tauri, ipc-proto, and ctl.
 ```
+
+## Configuration (§9.4)
+
+The overlay resolves `room`, `roomToken`, and `serverHost` at launch from
+the first non-empty source per key, in priority order:
+
+1. Command-line flags: `--room <id>`, `--room-token <token>`, `--server <host>`.
+2. Windows registry: `HKLM\Software\TCANationals\Timer\Room`, `\RoomToken`, `\Server` (REG_SZ).
+3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
+   `/etc/tca-timer/config.json` on Unix. JSON keys: `room`, `roomToken`, `server`.
+4. Environment variables: `TCA_TIMER_ROOM`, `TCA_TIMER_ROOM_TOKEN`, `TCA_TIMER_SERVER`.
+
+`serverHost` defaults to **`timer.tcanationals.com`** when no source supplies
+one. `room` and `roomToken` have no default — if either is missing, the
+overlay shows a red "Configuration error" banner listing each tried source
+and does NOT attempt to connect.
 
 ## Commands (frontend only, no Rust required)
 
