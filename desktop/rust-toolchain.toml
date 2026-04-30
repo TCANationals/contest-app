@@ -1,0 +1,6 @@
+[toolchain]
+# Latest stable as of 2026-04. Required so transitive deps that opt into
+# edition2024 (e.g. `hashbrown 0.17`, which Tauri 2 pulls in) compile.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

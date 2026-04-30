@@ -1,0 +1,88 @@
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci || npm install
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+      # The pinned toolchain in desktop/rust-toolchain.toml (stable) is
+      # picked up automatically; `dtolnay/rust-toolchain@stable` just
+      # ensures the channel is installed.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Tauri 2 on Linux pulls in GTK/WebKit system libs; install them so
+      # the whole workspace (incl. `tca-timer-desktop`) can be checked in
+      # CI, not just the non-Tauri IPC crates.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      # `tauri::generate_context!` reads the `frontendDist` path (`../dist`)
+      # at compile time, so we must produce the Vite bundle before running
+      # any Rust commands that touch the `tca-timer-desktop` crate.
+      - name: Build frontend bundle for Tauri context
+        run: |
+          npm ci || npm install
+          npm run build
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  tauri-msi:
+    # TODO(§14.1): wire tauri-apps/tauri-action for MSI artifact + Release
+    # attachment. Disabled until icons / signing settings / workflow secrets
+    # are configured.
+    if: false
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          args: '--verbose'

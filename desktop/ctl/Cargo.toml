@@ -1,0 +1,15 @@
+[package]
+name = "tca-timer-ctl"
+description = "Desktop shortcut CLI helper for TCA Timer (§9.6.3)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "tca-timer-ctl"
+path = "src/main.rs"
+
+[dependencies]
+tca-timer-ipc-proto = { path = "../ipc-proto" }
+interprocess = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "tca-timer-ipc-server"
+description = "Local IPC listener for the TCA Timer desktop app (§9.6)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+tca-timer-ipc-proto = { path = "../ipc-proto" }
+interprocess = { workspace = true }

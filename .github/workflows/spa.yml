@@ -1,0 +1,35 @@
+name: spa
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spa/**'
+      - '.github/workflows/spa.yml'
+  pull_request:
+    paths:
+      - 'spa/**'
+      - '.github/workflows/spa.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: spa/package-lock.json
+      - run: npm ci || npm install
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spa-dist
+          path: spa/dist
+          if-no-files-found: ignore
