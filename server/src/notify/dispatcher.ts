@@ -22,6 +22,16 @@ import { isInQuietHours } from './quiet-hours.js';
 export const DISPATCH_DELAY_MS = 5_000;
 export const JUDGE_DEBOUNCE_MS = 30_000;
 const RETRY_DELAY_MS = 10_000;
+/**
+ * When `fireDispatch` finds no qualifying judges (all in quiet hours,
+ * all recently acked, all opted out), we re-arm another dispatch later
+ * rather than silently dropping the notification. Quiet-hours windows
+ * flip on minute boundaries, so a 60 s retry cadence is plenty, and we
+ * cap the total wait so a contestant who's been forgotten doesn't
+ * accumulate pending timers forever.
+ */
+export const NO_JUDGES_RETRY_DELAY_MS = 60_000;
+export const NO_JUDGES_MAX_ELAPSED_MS = 30 * 60_000;
 
 export interface DispatchContext {
   room: string;
@@ -38,18 +48,37 @@ export interface DispatchHandle {
 }
 
 export function scheduleNotification(ctx: DispatchContext): DispatchHandle {
-  const timer = setTimeout(() => {
-    void fireDispatch(ctx).catch(() => {
-      // swallow; individual send errors are logged to audit_log inside
-    });
-  }, DISPATCH_DELAY_MS);
-  timer.unref?.();
+  let currentTimer: NodeJS.Timeout | null = null;
+  let cancelled = false;
+
+  const arm = (delayMs: number): void => {
+    if (cancelled) return;
+    currentTimer = setTimeout(() => {
+      if (cancelled) return;
+      void fireDispatch(ctx, (retryDelayMs) => {
+        if (cancelled) return;
+        arm(retryDelayMs);
+      }).catch(() => {
+        // swallow; individual send errors are logged to audit_log inside
+      });
+    }, delayMs);
+    currentTimer.unref?.();
+  };
+
+  arm(DISPATCH_DELAY_MS);
+
   return {
-    cancel: () => clearTimeout(timer),
+    cancel: () => {
+      cancelled = true;
+      if (currentTimer) clearTimeout(currentTimer);
+    },
   };
 }
 
-async function fireDispatch(ctx: DispatchContext): Promise<void> {
+async function fireDispatch(
+  ctx: DispatchContext,
+  rearm?: (delayMs: number) => void,
+): Promise<void> {
   const queueNow = ctx.getQueue();
   if (!isInQueue(queueNow, ctx.contestantId)) {
     await safeAudit({
@@ -72,7 +101,30 @@ async function fireDispatch(ctx: DispatchContext): Promise<void> {
 
   const now = new Date();
   const qualifying = judges.filter((j) => qualifies(j, ctx, now));
-  if (qualifying.length === 0) return;
+  if (qualifying.length === 0) {
+    // No judges are reachable right now — every candidate is either
+    // in quiet hours, recently acked, or opted out. Record a
+    // NOTIFY_DEFERRED breadcrumb and, if we're still within the
+    // re-arm window, schedule another pass for 60s from now so the
+    // notification will actually fire once someone becomes reachable
+    // (e.g., quiet hours end).
+    const elapsedMs = Date.now() - ctx.requestedAtServerMs;
+    const willRearm = rearm != null && elapsedMs < NO_JUDGES_MAX_ELAPSED_MS;
+    await safeAudit({
+      room: ctx.room,
+      atServerMs: Date.now(),
+      actorSub: 'system',
+      actorEmail: null,
+      eventType: willRearm ? 'NOTIFY_DEFERRED' : 'NOTIFY_ABANDONED',
+      payload: {
+        contestantId: ctx.contestantId,
+        candidateJudges: judges.length,
+        elapsedMs,
+      },
+    });
+    if (willRearm) rearm!(NO_JUDGES_RETRY_DELAY_MS);
+    return;
+  }
 
   await Promise.all(
     qualifying.map((judge) => sendToJudge(judge, ctx).catch(() => undefined)),
