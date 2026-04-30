@@ -1,0 +1,2 @@
+-- Placeholder migration scaffold.
+-- TODO: implement initial PostgreSQL schema migration.

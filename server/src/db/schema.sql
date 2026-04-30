@@ -1,0 +1,2 @@
+-- Placeholder schema scaffold.
+-- TODO(spec §11.3): replace with authoritative DDL from the implementation spec.

@@ -1,0 +1,21 @@
+name: SPA CI
+
+on:
+  push:
+    paths:
+      - "spa/**"
+      - ".github/workflows/spa.yml"
+  pull_request:
+    paths:
+      - "spa/**"
+      - ".github/workflows/spa.yml"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Placeholder
+        run: echo "TODO: scaffold SPA package and CI build/test commands"
