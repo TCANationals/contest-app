@@ -1,0 +1,22 @@
+# Dev-only image for the TCA Timer judge SPA.
+#
+# Mirrors `server/Dockerfile.dev`: install deps once, bind-mount the
+# source tree at runtime so vite's HMR sees host edits.
+
+FROM node:22-alpine
+
+RUN apk add --no-cache git bash
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+
+EXPOSE 5173
+
+# `--host` makes vite bind 0.0.0.0 so the dev server is reachable from
+# the host (and other devices on the LAN — handy for PWA install
+# testing on a phone).
+CMD ["npm", "run", "dev", "--", "--host", "--port", "5173"]

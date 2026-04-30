@@ -1,0 +1,133 @@
+# Local development stack for the TCA Timer.
+#
+# Brings up three services:
+#
+#   * `db`     — Postgres 16 with the schema applied via a one-shot
+#                migration job on first boot. Persists into the named
+#                volume `tca_timer_pgdata`.
+#   * `server` — Fastify + ws backend (`server/`) running `npm run dev`
+#                under tsx watch. Mounts the source tree read-write so
+#                edits on the host hot-reload inside the container.
+#                Listens on host port 3000.
+#   * `spa`    — Vite dev server for the judge SPA (`spa/`). Listens on
+#                host port 5173 with `--host` so a phone on the same
+#                LAN can reach it (PWA install testing). Mounts the
+#                source tree.
+#
+# Common usage:
+#
+#   docker compose up           # start everything (Ctrl+C to stop)
+#   docker compose up -d        # start in the background
+#   docker compose logs -f server
+#   docker compose exec server npm test
+#   docker compose down         # stop, keep the db volume
+#   docker compose down -v      # also drop the postgres volume (full reset)
+#
+# The compose file is intentionally dev-only — it uses bind mounts,
+# `npm run dev` watchers, and a permissive Postgres password. For
+# production we ship the server via Railway (see `server/railway.json`)
+# and the SPA via static hosting; this file is not used there.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tca_timer
+      POSTGRES_PASSWORD: tca_timer_dev
+      POSTGRES_DB: tca_timer
+    ports:
+      # Exposed so a host-side `psql`, DataGrip, or `npm run migrate`
+      # can talk to it directly without docker exec. Bound to 127.0.0.1
+      # so it isn't reachable from the LAN by default.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - tca_timer_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tca_timer -d tca_timer"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # One-shot service: applies the SQL files in `server/src/db/migrations/`
+  # against the freshly-booted Postgres, then exits 0. Compose's
+  # `depends_on: condition: service_completed_successfully` lets the
+  # `server` service wait for this before starting, so the very first
+  # `docker compose up` does not race the schema vs. the application.
+  migrate:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://tca_timer:tca_timer_dev@db:5432/tca_timer
+    command: ["npm", "run", "migrate"]
+    volumes:
+      - ./server:/app:rw
+      - server_node_modules:/app/node_modules
+    restart: "no"
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://tca_timer:tca_timer_dev@db:5432/tca_timer
+      # Local dev defaults: run without Cloudflare Access JWT
+      # verification (the /api/judge and /api/admin routes will return
+      # 401 missing_jwt as documented). To exercise those routes,
+      # populate these via a `.env` file at the repo root or via
+      # `docker compose run --rm -e CF_ACCESS_AUD=… server`.
+      CF_ACCESS_AUD: ""
+      CF_ACCESS_ISSUER: ""
+      CF_ACCESS_JWKS_URL: ""
+      PUBLIC_ORIGIN: "http://localhost:5173"
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./server:/app:rw
+      # Anonymous volume on top of /app/node_modules so the bind-mount
+      # above doesn't clobber the linux-x64 node_modules built inside
+      # the container with whatever the host (potentially macOS or
+      # Windows) has installed locally.
+      - server_node_modules:/app/node_modules
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+
+  spa:
+    build:
+      context: ./spa
+      dockerfile: Dockerfile.dev
+    depends_on:
+      server:
+        condition: service_started
+    environment:
+      # Vite reads these at dev-server boot so the SPA points at the
+      # compose-managed server. Override per developer if needed.
+      VITE_API_BASE: "http://localhost:3000"
+      VITE_WS_BASE: "ws://localhost:3000"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./spa:/app:rw
+      - spa_node_modules:/app/node_modules
+
+volumes:
+  tca_timer_pgdata:
+  server_node_modules:
+  spa_node_modules:
