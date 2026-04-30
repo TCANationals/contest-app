@@ -87,22 +87,86 @@ export class RateLimiter {
 
 /**
  * Per-source-IP new-connection limiter (§6.4): 30/min, token bucket.
+ *
+ * Uses a bounded LRU with idle-based eviction so the table doesn't grow
+ * unboundedly across the lifetime of a long-running server. A bucket that
+ * has been full (i.e., fully refilled and therefore indistinguishable from
+ * a fresh one) for longer than `idleTtlMs` is dropped on the next insertion
+ * or the next periodic sweep.
  */
-export class IpConnectionLimiter {
-  private readonly buckets = new Map<string, TokenBucket>();
-  private readonly config: TokenBucketConfig;
+export const IP_LIMITER_MAX_ENTRIES = 10_000;
+export const IP_LIMITER_IDLE_TTL_MS = 10 * 60 * 1000;
 
-  constructor(capacity = 30, refillPerSecond = 30 / 60) {
+interface IpEntry {
+  bucket: TokenBucket;
+  lastSeenMs: number;
+}
+
+export class IpConnectionLimiter {
+  private readonly buckets = new Map<string, IpEntry>();
+  private readonly config: TokenBucketConfig;
+  private readonly maxEntries: number;
+  private readonly idleTtlMs: number;
+
+  constructor(
+    capacity = 30,
+    refillPerSecond = 30 / 60,
+    maxEntries: number = IP_LIMITER_MAX_ENTRIES,
+    idleTtlMs: number = IP_LIMITER_IDLE_TTL_MS,
+  ) {
     this.config = { capacity, refillPerSecond };
+    this.maxEntries = maxEntries;
+    this.idleTtlMs = idleTtlMs;
   }
 
   allow(ip: string, now: number = Date.now()): boolean {
-    let bucket = this.buckets.get(ip);
-    if (!bucket) {
-      bucket = new TokenBucket(this.config, now);
-      this.buckets.set(ip, bucket);
+    let entry = this.buckets.get(ip);
+    if (entry) {
+      // LRU touch: re-insert so it lands at the tail.
+      this.buckets.delete(ip);
+    } else {
+      entry = { bucket: new TokenBucket(this.config, now), lastSeenMs: now };
     }
-    return bucket.take(1, now);
+    entry.lastSeenMs = now;
+    this.buckets.set(ip, entry);
+
+    if (this.buckets.size > this.maxEntries) {
+      this.evictIdle(now);
+      // If the table is still over the cap, drop the oldest entries until
+      // we're back under the cap. `Map` iterates in insertion order, so
+      // `keys().next()` is the LRU head.
+      while (this.buckets.size > this.maxEntries) {
+        const oldest = this.buckets.keys().next().value;
+        if (oldest == null) break;
+        this.buckets.delete(oldest);
+      }
+    }
+
+    return entry.bucket.take(1, now);
+  }
+
+  /**
+   * Drop every IP whose bucket has been idle longer than `idleTtlMs`.
+   * Returns the number of evicted entries. Safe to call at any time.
+   */
+  evictIdle(now: number = Date.now()): number {
+    const cutoff = now - this.idleTtlMs;
+    let evicted = 0;
+    for (const [ip, entry] of this.buckets) {
+      if (entry.lastSeenMs < cutoff) {
+        this.buckets.delete(ip);
+        evicted += 1;
+      } else {
+        // Insertion-ordered iteration: once we hit a fresh entry, every
+        // subsequent entry is at least as fresh.
+        break;
+      }
+    }
+    return evicted;
+  }
+
+  size(): number {
+    return this.buckets.size;
   }
 }
 

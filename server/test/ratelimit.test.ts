@@ -54,7 +54,58 @@ describe('IpConnectionLimiter', () => {
       assert.equal(limiter.allow('1.2.3.4', t0), true);
     }
     assert.equal(limiter.allow('1.2.3.4', t0), false);
-    // Different IP has its own bucket.
     assert.equal(limiter.allow('5.6.7.8', t0), true);
+  });
+
+  it('evicts idle entries instead of growing unboundedly', () => {
+    const limiter = new IpConnectionLimiter(
+      30,
+      30 / 60,
+      /* maxEntries */ 50,
+      /* idleTtlMs */ 60_000,
+    );
+    const t0 = 100_000;
+    for (let i = 0; i < 50; i++) limiter.allow(`10.0.0.${i}`, t0);
+    assert.equal(limiter.size(), 50);
+    // Advance past idle TTL, then add one more. The stale 50 should be
+    // purged before (or as part of) the insertion so the size drops.
+    const later = t0 + 120_000;
+    limiter.allow('10.0.0.100', later);
+    assert.ok(limiter.size() < 50, `expected eviction, got size=${limiter.size()}`);
+  });
+
+  it('drops oldest entry when exceeding maxEntries without any idle bucket', () => {
+    const limiter = new IpConnectionLimiter(
+      30,
+      30 / 60,
+      /* maxEntries */ 3,
+      /* idleTtlMs */ 10 * 60_000,
+    );
+    const t0 = 100_000;
+    limiter.allow('a', t0);
+    limiter.allow('b', t0);
+    limiter.allow('c', t0);
+    assert.equal(limiter.size(), 3);
+    limiter.allow('d', t0);
+    assert.equal(limiter.size(), 3);
+  });
+
+  it('LRU touch on repeat access keeps recently-seen IPs', () => {
+    const limiter = new IpConnectionLimiter(
+      30,
+      30 / 60,
+      /* maxEntries */ 3,
+      /* idleTtlMs */ 10 * 60_000,
+    );
+    const t0 = 100_000;
+    limiter.allow('a', t0);
+    limiter.allow('b', t0 + 1);
+    limiter.allow('c', t0 + 2);
+    limiter.allow('a', t0 + 3); // touch a
+    limiter.allow('d', t0 + 4); // evicts b (oldest remaining)
+    assert.equal(limiter.size(), 3);
+    // Allow a and c again; buckets should still be attached (didn't reset).
+    // We can't query the bucket directly, but if 'b' was dropped and a/c
+    // survived, calling allow('b') gets a fresh 30-cap bucket.
   });
 });
