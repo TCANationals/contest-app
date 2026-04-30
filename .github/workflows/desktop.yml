@@ -78,6 +78,18 @@ jobs:
         run: |
           npm ci || npm install
           npm run build
+      # `bundle.externalBin: ["binaries/tca-timer-ctl"]` in
+      # `tauri.conf.json` makes `tauri-build` (run as part of the
+      # `tca-timer-desktop` crate's `[build-dependencies]`) check that
+      # the per-target-triple sidecar exists on disk before *any*
+      # cargo command on the desktop crate succeeds. Plain
+      # `npm run build` is `tsc -b && vite build` and does NOT
+      # produce that sidecar — only Tauri's own `beforeBuildCommand`
+      # hook does, when running through the Tauri CLI. Run the
+      # dedicated `build:ctl` script here so `cargo clippy` /
+      # `cargo test` below can proceed on each matrix host.
+      - name: Build tca-timer-ctl sidecar for the target triple
+        run: npm run build:ctl
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
