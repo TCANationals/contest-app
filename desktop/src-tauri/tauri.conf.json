@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "identifier": "org.tcanationals.timer",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run prep:dev",
+    "beforeBuildCommand": "npm run prep:build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
@@ -43,6 +43,7 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "externalBin": ["binaries/tca-timer-ctl"],
     "macOS": {
       "minimumSystemVersion": "11.0"
     }
