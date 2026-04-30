@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { countdownStyle } from './colors';
 import { formatCountdown } from './format';
@@ -50,15 +50,6 @@ async function tauriEmit(event: string, payload: unknown): Promise<void> {
   await mod.emit(event, payload);
 }
 
-interface OverlayState {
-  timer: TimerState;
-  offsetMs: number;
-  connected: boolean;
-  visible: boolean;
-  bootstrap: BootstrapPayload | null;
-  bootstrapError: string | null;
-}
-
 const IDLE_TIMER: TimerState = {
   room: '',
   version: 0,
@@ -78,7 +69,10 @@ export function Overlay() {
   const [offsetMs, setOffsetMs] = useState(0);
   const [connected, setConnected] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [displayMs, setDisplayMs] = useState<number | null>(null);
+  // `renderTick` exists purely to force a re-render every 250 ms so the
+  // derived `displayMs` below re-evaluates against the wall clock. Its
+  // value is ignored.
+  const [, setRenderTick] = useState(0);
   const [flashPhase, setFlashPhase] = useState(false);
   const [pulsePhase, setPulsePhase] = useState(false);
 
@@ -157,12 +151,14 @@ export function Overlay() {
     };
   }, [bootstrap]);
 
-  // 4 Hz render tick per §6.3.
+  // 4 Hz ticker per §6.3. Forces a re-render every 250 ms so the
+  // derived `displayMs` (computed below, synchronously from `timer` +
+  // `offsetMs`) re-evaluates against the latest wall clock. The alarm
+  // side-effect is checked at the same cadence.
   useEffect(() => {
     const id = setInterval(() => {
+      setRenderTick((n) => (n + 1) | 0);
       const rem = computeRemainingMs(timer, offsetMs);
-      setDisplayMs(rem);
-
       const now = Date.now();
       if (
         bootstrap?.preferences?.alarm &&
@@ -183,6 +179,13 @@ export function Overlay() {
     return () => clearInterval(id);
   }, [timer, offsetMs, bootstrap]);
 
+  // Reset the alarm "previous remaining" tracker whenever the timer
+  // state changes so that, e.g., a fresh TIMER_SET doesn't look like "we
+  // just crossed zero" to `shouldFireAlarm` on the next tick.
+  useEffect(() => {
+    prevRemRef.current = computeRemainingMs(timer, offsetMs);
+  }, [timer]);
+
   // 1 Hz flash + pulse phase for under-threshold flashing and sub-minute
   // pulse (§9.2 / §9.5.2). Purely cosmetic; does not affect timekeeping.
   useEffect(() => {
@@ -194,6 +197,12 @@ export function Overlay() {
   }, []);
 
   const prefs: Preferences | undefined = bootstrap?.preferences;
+  // Derive `displayMs` synchronously from the current timer + offset so a
+  // re-render triggered by a new STATE frame never displays the remaining
+  // time from the previous timer (which would briefly flash "00:00" in
+  // red when transitioning idle → running, etc.).
+  const displayMs: number | null =
+    timer.status === 'idle' ? null : computeRemainingMs(timer, offsetMs);
   const style = countdownStyle(timer.status, displayMs);
   const isRunning = timer.status === 'running';
   const rem = displayMs ?? 0;
