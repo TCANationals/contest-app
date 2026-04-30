@@ -233,5 +233,3 @@ function UndoBanner({
     </div>
   );
 }
-
-export { ADJUST_STEPS_MIN };

@@ -116,8 +116,20 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       send({ type: 'PING', t0: Date.now() });
     };
 
+    // Generation token that bumps every time we start a new connect(). When
+    // a connect resumes from `await mintTicket()` it MUST verify it is still
+    // the latest in-flight attempt; otherwise it would assign an orphan
+    // socket to socketRef while a fresher connect (e.g. from onVisible
+    // firing again during the await) is also in flight. Whichever assigns
+    // last would orphan the other socket — never closed, leaking server
+    // connections until the heartbeat timeout sweeps them.
+    let connectGen = 0;
+
     const connect = async () => {
       if (cancelled || closedRef.current) return;
+      const myGen = ++connectGen;
+      const isLatest = () => !cancelled && !closedRef.current && connectGen === myGen;
+
       setConnection(
         attemptRef.current === 0 && !wasConnectedRef.current
           ? 'connecting'
@@ -127,15 +139,15 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       try {
         ticket = await mintTicketRef.current();
       } catch (err) {
-        if (cancelled || closedRef.current) return;
+        if (!isLatest()) return;
         setError({ code: 'TICKET_FAILED', message: (err as Error).message });
         scheduleReconnect();
         return;
       }
-      // The effect cleanup (room change, unmount, StrictMode re-run) may have
-      // flipped `cancelled` while we were awaiting the ticket. If so, do not
-      // create a stray socket — the new effect run owns the connection now.
-      if (cancelled || closedRef.current) return;
+      // The effect cleanup (room change, unmount, StrictMode re-run) or a
+      // newer connect() may have happened during the mintTicket await. Bail
+      // unless we are still the latest in-flight attempt.
+      if (!isLatest()) return;
 
       const base = wsBase ?? defaultWsBase();
       const url = `${base}/judge?room=${encodeURIComponent(room)}&ticket=${encodeURIComponent(ticket)}`;
