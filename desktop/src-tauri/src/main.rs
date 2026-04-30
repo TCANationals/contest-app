@@ -8,6 +8,7 @@ mod preferences;
 use std::sync::Arc;
 
 use app_state::{AppState, Effects};
+use tca_timer_ipc_server::Handler;
 use config::{resolve, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
 use preferences::{
     load_from_path, write_atomic, Corner, LoadAction, Preferences,
@@ -199,7 +200,11 @@ fn apply_visibility(app: &AppHandle, visible: bool) {
 /// DPI-change events re-pin to the user's latest choice (§9.2).
 pub type CurrentCorner = Arc<Mutex<Corner>>;
 
-fn build_tray(app: &AppHandle, current_corner: CurrentCorner) -> tauri::Result<()> {
+fn build_tray(
+    app: &AppHandle,
+    current_corner: CurrentCorner,
+    state: AppState,
+) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
     let pos_tl = MenuItem::with_id(app, "pos-tl", "Top left", true, None::<&str>)?;
@@ -227,6 +232,7 @@ fn build_tray(app: &AppHandle, current_corner: CurrentCorner) -> tauri::Result<(
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
+    let state_for_tray = state.clone();
     let _tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -241,13 +247,16 @@ fn build_tray(app: &AppHandle, current_corner: CurrentCorner) -> tauri::Result<(
                 let _ = app_for_tray.emit("overlay:set-corner", label);
             };
             match id {
+                // Route visibility through AppState so the IPC /status
+                // handler and a follow-up tca-timer-ctl timer toggle
+                // always see the tray's effect. The Handler impl on
+                // AppState already applies the Tauri window show/hide
+                // via its `set_visible` effect.
                 "show" => {
-                    apply_visibility(&app_for_tray, true);
-                    let _ = app_for_tray.emit("overlay:set-visible", true);
+                    let _ = state_for_tray.timer_show();
                 }
                 "hide" => {
-                    apply_visibility(&app_for_tray, false);
-                    let _ = app_for_tray.emit("overlay:set-visible", false);
+                    let _ = state_for_tray.timer_hide();
                 }
                 "pos-tl" => reposition(Corner::TopLeft, "topLeft"),
                 "pos-tr" => reposition(Corner::TopRight, "topRight"),
@@ -310,10 +319,6 @@ fn main() {
                     .expect("current-corner mutex poisoned"),
             );
 
-            if let Err(err) = build_tray(&handle, current_corner.clone()) {
-                eprintln!("tca-timer: tray init failed: {err}");
-            }
-
             // Re-pin to whichever corner the user most recently chose
             // whenever the monitor setup changes (§9.2 "Multi-monitor").
             // Reading from the shared `CurrentCorner` means a tray
@@ -355,6 +360,14 @@ fn main() {
             );
             let state_for_ipc = Arc::new(state.clone());
             ipc_server::run(state_for_ipc);
+
+            // Tray menu is built after AppState so tray Show/Hide can
+            // route through it — otherwise AppState.visible would
+            // drift away from the real window state and /status would
+            // lie.
+            if let Err(err) = build_tray(&handle, current_corner.clone(), state.clone()) {
+                eprintln!("tca-timer: tray init failed: {err}");
+            }
 
             // Listen for overlay frontend status updates (§9.6.2 /status).
             // The frontend drives both signals authoritatively: it
