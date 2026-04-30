@@ -137,6 +137,7 @@ Thumbs.db
 
 # Rust / Tauri build outputs
 target/
+desktop/src-tauri/gen/
 
 # Vite build outputs
 **/dist/

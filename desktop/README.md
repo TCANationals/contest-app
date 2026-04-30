@@ -38,19 +38,27 @@ npm run build      # vite build
 
 ## Rust crates
 
-The Rust side is organized as a Cargo workspace so the IPC server and the
-`ctl` helper can share a single protocol crate.
+The Rust side is organized as a Cargo workspace (`desktop/Cargo.toml`) with
+a pinned toolchain in `desktop/rust-toolchain.toml` (latest stable — 1.95).
+Stable is required because Tauri 2's transitive deps use `edition2024`.
 
 ```bash
 # From desktop/
-cargo test -p tca-timer-ipc-proto            # Request/Response framing.
-cargo test -p tca-timer-ipc-server           # Listener + dispatcher.
-cargo test -p tca-timer-ctl                  # (currently compile-only)
+cargo test --workspace                       # All crates, incl. Tauri bin.
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The `ipc-server` tests include a real-socket loopback that spins up the
 listener and drives it with a `ctl`-style client, so the OS-agnostic
-transport is exercised end-to-end without Tauri.
+transport is exercised end-to-end.
+
+On Linux the Tauri crate needs the system libs below; the Desktop CI job
+installs them automatically:
+
+```bash
+sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
+```
 
 ## Tauri build (requires Rust toolchain + Windows host)
 

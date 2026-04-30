@@ -30,20 +30,33 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  rust-ipc:
+  rust:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v4
+      # The pinned toolchain in desktop/rust-toolchain.toml (stable) is
+      # picked up automatically; `dtolnay/rust-toolchain@stable` just
+      # ensures the channel is installed.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Tauri 2 on Linux pulls in GTK/WebKit system libs; install them so
+      # the whole workspace (incl. `tca-timer-desktop`) can be checked in
+      # CI, not just the non-Tauri IPC crates.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-      # Exercise the OS-agnostic IPC crates without pulling in Tauri's
-      # system dependencies (§9.6). The full Tauri build runs in `tauri-msi`.
-      - run: cargo test -p tca-timer-ipc-proto -p tca-timer-ipc-server -p tca-timer-ctl --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
 
   tauri-msi:
     # TODO(§14.1): wire tauri-apps/tauri-action for MSI artifact + Release
