@@ -1,8 +1,11 @@
 {
   "name": "TCA Timer",
   "short_name": "TCA Timer",
+  "description": "Judge control surface for the SkillsUSA TCA Timer & Help-Call System.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#ffffff",
   "theme_color": "#111111",
   "icons": []
