@@ -203,6 +203,43 @@ describe('WsClient', () => {
     c.stop();
   });
 
+  it('queues HELP_CANCEL for reconnect when WS drops after request landed', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const pendingTransitions: boolean[] = [];
+    const c = new WsClient({
+      url: 'wss://h',
+      onState: () => undefined,
+      onStatus: () => undefined,
+      onOffset: () => undefined,
+      onHelpPendingChanged: (p) => pendingTransitions.push(p),
+      WebSocketImpl: asWSImpl(),
+    });
+    c.start();
+    const ws1 = FakeWebSocket.instances[0]!;
+    ws1.simulateOpen();
+
+    // Request lands on the wire, then server connection drops.
+    expect(c.sendHelpRequest()).toBe(true);
+    expect(pendingTransitions).toEqual([true]);
+    ws1.simulateServerClose();
+
+    // User cancels while offline — not locally queued (it was already
+    // sent), so the cancel must be queued for reconnect flush rather
+    // than silently dropped.
+    expect(c.sendHelpCancel()).toBe(false);
+    expect(pendingTransitions).toEqual([true]);
+
+    vi.advanceTimersByTime(1);
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!;
+    ws2.simulateOpen();
+
+    // The queued cancel hits the wire and fires the transition.
+    expect(ws2.sent.map((s) => JSON.parse(s).type)).toContain('HELP_CANCEL');
+    expect(pendingTransitions).toEqual([true, false]);
+
+    c.stop();
+  });
+
   it('reports help-pending transitions via onHelpPendingChanged', () => {
     const pendingTransitions: boolean[] = [];
     const c = new WsClient({

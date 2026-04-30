@@ -58,5 +58,9 @@ export function shouldFlash(
   if (!enabled) return false;
   if (status !== 'running') return false;
   const thresholdMs = thresholdMinutes * 60_000;
+  // §9.5.2 is explicit: "remaining time ≤ thresholdMinutes * 60_000 ms
+  // while running". `≤` (inclusive) is the contractual boundary; the
+  // exact 2:00.000 tick at which flashing begins is negligible at
+  // render cadence but matches the spec verbatim.
   return remainingMs <= thresholdMs;
 }

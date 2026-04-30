@@ -42,9 +42,17 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private closed = false;
-  /** Help-request sent locally while the socket was down; flushed on
+  /** Help-request issued locally while the socket was down; flushed on
    * connect (§9.6.2 `queued_offline`). */
   private pendingHelpRequest = false;
+  /** Set when the server has received a HELP_REQUEST that has not yet
+   * been cancelled from this client. Used so a later HELP_CANCEL made
+   * while the socket is down can be queued and flushed on reconnect
+   * instead of silently dropped. */
+  private helpOutstanding = false;
+  /** A HELP_CANCEL the caller issued while the socket was down; flushed
+   * on reconnect only if `helpOutstanding` is still true at that point. */
+  private pendingHelpCancel = false;
   private readonly WS: typeof WebSocket;
 
   constructor(private readonly opts: WsClientOptions) {
@@ -73,22 +81,44 @@ export class WsClient {
   }
 
   sendHelpRequest(): boolean {
+    // Supersedes a queued-but-unsent HELP_CANCEL — the user asking for
+    // help again while offline clearly means they want help.
+    this.pendingHelpCancel = false;
     if (!this.sendFrame({ type: 'HELP_REQUEST' })) {
       this.pendingHelpRequest = true;
       return false;
     }
+    this.helpOutstanding = true;
     this.opts.onHelpPendingChanged?.(true);
     return true;
   }
 
   sendHelpCancel(): boolean {
-    const wasQueued = this.pendingHelpRequest;
+    const wasLocallyQueued = this.pendingHelpRequest;
     this.pendingHelpRequest = false;
-    const sent = this.sendFrame({ type: 'HELP_CANCEL' });
-    if (sent || wasQueued) {
+
+    // Local-queue cancel: request never actually left this client, so
+    // there's nothing to tell the server about. Fire the transition and
+    // we're done.
+    if (wasLocallyQueued && !this.helpOutstanding) {
       this.opts.onHelpPendingChanged?.(false);
+      return true;
     }
-    return sent;
+
+    const sent = this.sendFrame({ type: 'HELP_CANCEL' });
+    if (sent) {
+      this.helpOutstanding = false;
+      this.pendingHelpCancel = false;
+      this.opts.onHelpPendingChanged?.(false);
+      return true;
+    }
+
+    // WS is down but we have a live HELP_REQUEST on the server — queue
+    // the cancel for flush on reconnect so it isn't silently dropped.
+    if (this.helpOutstanding) {
+      this.pendingHelpCancel = true;
+    }
+    return false;
   }
 
   private connect(): void {
@@ -110,8 +140,29 @@ export class WsClient {
       this.tracker.clear();
       this.opts.onStatus({ connected: true, attempt: 0 });
       this.runWarmupBurst();
-      if (this.pendingHelpRequest && this.sendFrame({ type: 'HELP_REQUEST' })) {
+      // Flush queued help-request / help-cancel in the order the user
+      // issued them. If both are queued, the cancel means the user
+      // changed their mind before we ever reached the server, so it's
+      // enough to drop the queued request and fire the transition.
+      if (this.pendingHelpCancel) {
+        if (this.pendingHelpRequest) {
+          this.pendingHelpRequest = false;
+          this.pendingHelpCancel = false;
+          this.opts.onHelpPendingChanged?.(false);
+        } else if (
+          this.helpOutstanding &&
+          this.sendFrame({ type: 'HELP_CANCEL' })
+        ) {
+          this.pendingHelpCancel = false;
+          this.helpOutstanding = false;
+          this.opts.onHelpPendingChanged?.(false);
+        }
+      } else if (
+        this.pendingHelpRequest &&
+        this.sendFrame({ type: 'HELP_REQUEST' })
+      ) {
         this.pendingHelpRequest = false;
+        this.helpOutstanding = true;
         this.opts.onHelpPendingChanged?.(true);
       }
     };
