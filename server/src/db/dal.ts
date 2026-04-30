@@ -161,7 +161,14 @@ async function _getJudgePrefs(sub: string): Promise<JudgePrefsRow | null> {
   return res.rows[0] ?? null;
 }
 
-async function _upsertJudgePrefs(row: {
+/**
+ * Partial-update shape for `_upsertJudgePrefs`. Every field other than
+ * `sub` and `lastSeenEmail` is optional and `undefined` means "leave the
+ * existing value alone". `null` is a real, distinct value (e.g., clearing
+ * a phone number). This disambiguates partial vs full updates, which the
+ * previous `COALESCE`-everywhere approach silently conflated.
+ */
+export interface JudgePrefsPatch {
   sub: string;
   lastSeenEmail: string;
   phoneE164?: string | null;
@@ -177,8 +184,31 @@ async function _upsertJudgePrefs(row: {
   quietHoursEnd?: string | null;
   quietHoursWeekdays?: number;
   timezone?: string;
-}): Promise<void> {
+}
+
+async function _upsertJudgePrefs(row: JudgePrefsPatch): Promise<void> {
   const pool = getPool();
+
+  // Fixed positional placeholders for the VALUES list. The DO UPDATE SET
+  // clause reuses these same placeholders — PostgreSQL permits the same
+  // $N to appear multiple times in one statement — so no extra parameters
+  // are needed, and a field that was not supplied on the patch is simply
+  // omitted from the SET clause (preserving its existing value).
+  const sets: string[] = ['last_seen_email = $2', 'updated_at = now()'];
+  if (row.phoneE164 !== undefined) sets.push('phone_e164 = $3');
+  if (row.phoneStatus !== undefined) sets.push('phone_status = $4');
+  if (row.pendingPhoneCodeHash !== undefined) sets.push('pending_phone_code_hash = $5');
+  if (row.pendingPhoneExpiresAt !== undefined) sets.push('pending_phone_expires_at = $6');
+  if (row.emailAddress !== undefined) sets.push('email_address = $7');
+  if (row.emailStatus !== undefined) sets.push('email_status = $8');
+  if (row.pendingEmailCodeHash !== undefined) sets.push('pending_email_code_hash = $9');
+  if (row.pendingEmailExpiresAt !== undefined) sets.push('pending_email_expires_at = $10');
+  if (row.enabledRooms !== undefined) sets.push('enabled_rooms = $11');
+  if (row.quietHoursStart !== undefined) sets.push('quiet_hours_start = $12');
+  if (row.quietHoursEnd !== undefined) sets.push('quiet_hours_end = $13');
+  if (row.quietHoursWeekdays !== undefined) sets.push('quiet_hours_weekdays = $14');
+  if (row.timezone !== undefined) sets.push('timezone = $15');
+
   await pool.query(
     `INSERT INTO judge_prefs (
         sub, last_seen_email,
@@ -191,22 +221,7 @@ async function _upsertJudgePrefs(row: {
               $7, COALESCE($8,'none'), $9, $10,
               COALESCE($11,'{}'::text[]), $12, $13, COALESCE($14,0), COALESCE($15,'UTC'),
               now())
-      ON CONFLICT (sub) DO UPDATE SET
-        last_seen_email          = EXCLUDED.last_seen_email,
-        phone_e164               = COALESCE(EXCLUDED.phone_e164, judge_prefs.phone_e164),
-        phone_status             = COALESCE(EXCLUDED.phone_status, judge_prefs.phone_status),
-        pending_phone_code_hash  = EXCLUDED.pending_phone_code_hash,
-        pending_phone_expires_at = EXCLUDED.pending_phone_expires_at,
-        email_address            = COALESCE(EXCLUDED.email_address, judge_prefs.email_address),
-        email_status             = COALESCE(EXCLUDED.email_status, judge_prefs.email_status),
-        pending_email_code_hash  = EXCLUDED.pending_email_code_hash,
-        pending_email_expires_at = EXCLUDED.pending_email_expires_at,
-        enabled_rooms            = EXCLUDED.enabled_rooms,
-        quiet_hours_start        = EXCLUDED.quiet_hours_start,
-        quiet_hours_end          = EXCLUDED.quiet_hours_end,
-        quiet_hours_weekdays     = EXCLUDED.quiet_hours_weekdays,
-        timezone                 = EXCLUDED.timezone,
-        updated_at               = now()`,
+      ON CONFLICT (sub) DO UPDATE SET ${sets.join(', ')}`,
     [
       row.sub,
       row.lastSeenEmail,
