@@ -5,6 +5,11 @@
 //   3) broadcast STATE / HELP_QUEUE (never await the DB write)
 
 import type { WebSocket } from 'ws';
+import {
+  ServerOutboundFrameSchema,
+  type ServerOutboundFrame,
+} from '@tca-timer/shared/api';
+
 import { initialHelpQueue, type HelpQueue, isInQueue } from './help-queue.js';
 import { initialTimerState, type TimerState } from './timer.js';
 import {
@@ -66,20 +71,93 @@ export function allRoomStates(): ReadonlyMap<string, RoomState> {
 // Broadcasts
 // ---------------------------------------------------------------------------
 
+/**
+ * In dev and test builds, parse every outbound frame against the
+ * §5.2 contract from `@tca-timer/shared/api` before it hits the
+ * wire. A failure here indicates drift between the server and the
+ * schema the SPA + contestant overlay parse with — we want those to
+ * show up as a loud thrown error during `npm test` rather than as a
+ * silent "undefined" reaching a client.
+ *
+ * Skipped in production (`NODE_ENV=production`) to keep the hot
+ * broadcast path allocation-free: the schemas allocate transient
+ * objects during parse, and broadcasts fire several times per second
+ * under load.
+ *
+ * `ServerOutboundFrameSchema` is the union of every frame any client
+ * (judge or contestant) is allowed to receive, so it works for every
+ * builder below without needing to know which socket type a frame is
+ * destined for at construction time.
+ */
+function assertOutboundFrameContract(frame: ServerOutboundFrame): void {
+  if (process.env.NODE_ENV === 'production') return;
+  const result = ServerOutboundFrameSchema.safeParse(frame);
+  if (result.success) return;
+  const detail = result.error.issues
+    .slice(0, 3)
+    .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+    .join('; ');
+  throw new Error(`outbound WS frame violates §5.2 contract: ${detail}`);
+}
+
 export function stateFrame(state: TimerState, connectedContestants: number): string {
-  return JSON.stringify({
+  const frame: ServerOutboundFrame = {
     type: 'STATE',
     ...state,
     connectedContestants,
     dbDegraded: isDbDegraded(),
-  });
+  };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
 }
 
 export function helpQueueFrame(queue: HelpQueue): string {
-  return JSON.stringify({
-    type: 'HELP_QUEUE',
-    ...queue,
-  });
+  const frame: ServerOutboundFrame = { type: 'HELP_QUEUE', ...queue };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
+}
+
+/**
+ * Build a HELP_ACKED frame string for the targeted notify in §7.1
+ * (judge-ack → contestant overlay clears `help_pending`).
+ */
+export function helpAckedFrame(
+  room: string,
+  contestantId: string,
+  version: number,
+  waitMs: number,
+  ackedAtServerMs: number,
+): string {
+  const frame: ServerOutboundFrame = {
+    type: 'HELP_ACKED',
+    room,
+    contestantId,
+    version,
+    waitMs,
+    ackedAtServerMs,
+  };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
+}
+
+/**
+ * Build a PONG frame string. Centralized here (alongside `stateFrame`
+ * and `helpQueueFrame`) so every frame the server emits on the wire
+ * flows through the same §5.2 contract check.
+ */
+export function pongFrame(t0: number, t1: number, t2: number): string {
+  const frame: ServerOutboundFrame = { type: 'PONG', t0, t1, t2 };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
+}
+
+/**
+ * Build an ERROR frame string. Same rationale as `pongFrame`.
+ */
+export function errorFrame(code: string, message: string): string {
+  const frame: ServerOutboundFrame = { type: 'ERROR', code, message };
+  assertOutboundFrameContract(frame);
+  return JSON.stringify(frame);
 }
 
 export function broadcastState(room: RoomState): void {
@@ -91,6 +169,37 @@ export function broadcastState(room: RoomState): void {
 export function broadcastHelpQueueToJudges(room: RoomState): void {
   const frame = helpQueueFrame(room.helpQueue);
   for (const s of room.judges) safeSend(s, frame);
+}
+
+/**
+ * §7.1 targeted notify: tell the contestant whose help request was
+ * just acknowledged by a judge so their overlay can clear
+ * `help_pending` and show the spec'd "Judge acknowledged" toast.
+ *
+ * Multiple sockets can claim the same `contestantId` (rare but
+ * possible — e.g. the contestant has two windows open or briefly
+ * doubled-up during a reconnect race). All matching sockets are
+ * notified; non-matches are skipped.
+ */
+export function notifyContestantHelpAcked(
+  room: RoomState,
+  contestantId: string,
+  version: number,
+  waitMs: number,
+  ackedAtServerMs: number,
+): void {
+  const frame = helpAckedFrame(
+    room.id,
+    contestantId,
+    version,
+    waitMs,
+    ackedAtServerMs,
+  );
+  for (const s of room.contestants) {
+    if (room.contestantIdBySocket.get(s) === contestantId) {
+      safeSend(s, frame);
+    }
+  }
 }
 
 export function safeSend(socket: WebSocket, frame: string): void {

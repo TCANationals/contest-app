@@ -2,6 +2,11 @@
 // full jitter, warm-up time-sync burst, 30 s PING cadence, offline help
 // queueing.
 
+import {
+  ContestantInboundFrameSchema,
+  type ContestantOutboundFrame,
+} from '@tca-timer/shared/api';
+
 import { computeSample, OffsetTracker } from './timesync';
 import type { TimerState } from './types';
 
@@ -217,39 +222,71 @@ export class WsClient {
 
   private handleMessage(raw: unknown): void {
     if (typeof raw !== 'string') return;
-    let frame: { type: string } & Record<string, unknown>;
+    let parsed: unknown;
     try {
-      frame = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
       return;
     }
+    // Validate the frame against the shared §5.2 contestant schema
+    // before dispatching. A malformed frame from a misbehaving or
+    // version-skewed server is silently dropped (with a console
+    // warning) rather than crashing the overlay or seeding bogus
+    // samples into the time-sync tracker. NaN/string `t0,t1,t2` and
+    // missing TimerState fields are both rejected here.
+    const result = ContestantInboundFrameSchema.safeParse(parsed);
+    if (!result.success) {
+      console.warn(
+        'tca-timer: discarding malformed WS frame',
+        result.error.issues.slice(0, 3),
+      );
+      return;
+    }
+    const frame = result.data;
     switch (frame.type) {
       case 'PONG': {
-        const t0 = Number(frame.t0);
-        const t1 = Number(frame.t1);
-        const t2 = Number(frame.t2);
-        if (
-          !Number.isFinite(t0) ||
-          !Number.isFinite(t1) ||
-          !Number.isFinite(t2)
-        )
-          return;
-        const sample = computeSample(t0, t1, t2, Date.now());
+        const sample = computeSample(frame.t0, frame.t1, frame.t2, Date.now());
         this.tracker.push(sample);
         const active = this.tracker.activeOffsetMs();
         if (active != null) this.opts.onOffset(active);
         break;
       }
       case 'STATE': {
-        this.opts.onState(frame as unknown as TimerState);
+        // `StateFrame` is `{ type: 'STATE' } & TimerState`, so a
+        // shape-preserving copy minus the discriminator is the timer
+        // state the overlay renders against.
+        const { type: _t, ...timer } = frame;
+        this.opts.onState(timer as TimerState);
         break;
       }
-      default:
+      case 'HELP_ACKED': {
+        // §7.1: a judge acknowledged this contestant's help request.
+        // Drain local-only queued state unconditionally — a stale
+        // queued cancel or an offline-queued request both become
+        // moot the moment the server confirms the request has been
+        // ack'd through some other path.
+        this.pendingHelpRequest = false;
+        this.pendingHelpCancel = false;
+        // Only emit `onHelpPendingChanged(false)` when a prior `true`
+        // was observed externally (`helpOutstanding`), so the
+        // transition stream stays balanced. A late ack arriving after
+        // a self-cancel race must not fire a spurious second `false`.
+        if (this.helpOutstanding) {
+          this.helpOutstanding = false;
+          this.opts.onHelpPendingChanged?.(false);
+        }
+        break;
+      }
+      case 'ERROR':
+        // Contestants don't surface ERROR frames anywhere user-visible
+        // today; close + reconnect is enough to recover from anything
+        // the server reports here. Logged for diagnostics.
+        console.warn('tca-timer: server ERROR frame', frame.code, frame.message);
         break;
     }
   }
 
-  private sendFrame(obj: unknown): boolean {
+  private sendFrame(obj: ContestantOutboundFrame): boolean {
     if (this.ws?.readyState !== this.WS.OPEN) return false;
     try {
       this.ws.send(JSON.stringify(obj));

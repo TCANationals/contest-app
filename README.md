@@ -56,19 +56,66 @@ docker compose down -v      # also drop the postgres volume (full reset)
 
 What it brings up:
 
-| Service   | Image / source                          | Host port                | Notes                                           |
-| :-------- | :-------------------------------------- | :----------------------- | :---------------------------------------------- |
-| `db`      | `postgres:16-alpine`                    | `127.0.0.1:5432`         | Volume `tca_timer_pgdata`                        |
-| `migrate` | `server/Dockerfile.dev`, one-shot       | n/a                      | Runs `npm run migrate` on first boot            |
-| `server`  | `server/Dockerfile.dev`                 | `0.0.0.0:3000`           | `npm run dev` (`tsx watch`) with bind-mounted source so host edits hot-reload |
-| `spa`     | `spa/Dockerfile.dev`                    | `0.0.0.0:5173`           | `vite --host` with bind-mounted source          |
+| Service     | Image / source                          | Host port                | Notes                                           |
+| :---------- | :-------------------------------------- | :----------------------- | :---------------------------------------------- |
+| `db`        | `postgres:16-alpine`                    | `127.0.0.1:5432`         | Volume `tca_timer_pgdata`                        |
+| `migrate`   | `server/Dockerfile.dev`, one-shot       | n/a                      | Runs `npm run migrate` on first boot            |
+| `seed-dev`  | `server/Dockerfile.dev`, one-shot       | n/a                      | Idempotent — seeds the `dev` room (see below)    |
+| `server`    | `server/Dockerfile.dev`                 | `0.0.0.0:3000`           | `npm run dev` (`tsx watch`) with bind-mounted source so host edits hot-reload |
+| `spa`       | `spa/Dockerfile.dev`                    | `0.0.0.0:5173`           | `vite --host` with bind-mounted source          |
 
 The `desktop/` app is a native Tauri binary; it's not part of the
-compose stack and is run from its own directory (`npm run tauri dev`).
+compose stack and is run from its own directory. See
+[Running the desktop overlay against compose](#running-the-desktop-overlay-against-compose)
+below for the launch command.
 
 The compose file is intentionally dev-only — bind mounts, watcher
 processes, and a permissive Postgres password. Production server
 deployment continues to go through Railway (`server/railway.json`).
+
+### Seeded dev room
+
+The `seed-dev` service runs once on every `docker compose up` and
+upserts a single, well-known room so a fresh stack is immediately
+usable end-to-end without an admin-API round-trip:
+
+| Field             | Value             |
+| :---------------- | :---------------- |
+| Room id           | `dev`             |
+| Display label     | `Dev Room`        |
+| Room token        | `dev-room-token`  |
+
+The token is **not a secret** — it lives in
+[`server/src/db/seed-dev.ts`](./server/src/db/seed-dev.ts) and is
+hard-coded for the local-dev contract only. The seed script refuses
+to run when `NODE_ENV=production`. To re-run it against a running
+stack (e.g. after `docker compose down -v` rotated the bcrypt salt):
+
+```bash
+docker compose run --rm seed-dev
+```
+
+### Running the desktop overlay against compose
+
+The Tauri overlay accepts `--room`, `--room-token`, and `--server`
+flags ([`desktop/src-tauri/src/config.rs`](./desktop/src-tauri/src/config.rs))
+and downgrades the WebSocket scheme to `ws://` for `localhost`,
+`127.0.0.1`, and `[::1]` (see
+[`desktop/src/url.ts`](./desktop/src/url.ts)). With the compose stack
+running on host port 3000, the easiest way to launch the overlay
+against the seeded `dev` room is via the supported env vars
+([`config::read_env`](./desktop/src-tauri/src/config.rs)):
+
+```bash
+cd desktop
+npm install   # first run only
+TCA_TIMER_ROOM=dev TCA_TIMER_ROOM_TOKEN=dev-room-token TCA_TIMER_SERVER=localhost:3000 npm run tauri dev
+```
+
+Once connected the overlay shows the timer state for the `dev` room.
+The judge SPA at <http://localhost:5173> drives that same room — pick
+**Dev Room** in the room list and any `TIMER_SET` you issue will
+broadcast to the overlay in real time.
 
 ## Component status
 

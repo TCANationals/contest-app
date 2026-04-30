@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 
+import { JudgeInboundFrameSchema } from '@tca-timer/shared/api';
+
 import { useAppStore } from '../store';
-import type { JudgeOutboundFrame, ServerFrame } from '../store/types';
+import type { JudgeOutboundFrame } from '../store/types';
 import { OffsetTracker } from './useTimer';
 
 export interface UseJudgeSocketOptions {
@@ -182,12 +184,25 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
 
       ws.addEventListener('message', (ev) => {
         if (!isCurrent()) return;
-        let frame: ServerFrame;
+        let parsed: unknown;
         try {
-          frame = JSON.parse(ev.data as string) as ServerFrame;
+          parsed = JSON.parse(ev.data as string);
         } catch {
           return;
         }
+        // Runtime-validate against the shared §5.2 contract so a
+        // version-skewed or buggy server can't poison the timer state
+        // or push NaN samples into the time-sync tracker.
+        const result = JudgeInboundFrameSchema.safeParse(parsed);
+        if (!result.success) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            'tca-timer: discarding malformed WS frame',
+            result.error.issues.slice(0, 3),
+          );
+          return;
+        }
+        const frame = result.data;
         switch (frame.type) {
           case 'PONG': {
             const t3 = Date.now();
@@ -195,12 +210,27 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
             setOffset(trackerRef.current.getActiveOffset());
             break;
           }
-          case 'STATE':
-            setTimer(frame.state);
+          case 'STATE': {
+            // The server spreads `TimerState` onto the frame (see
+            // `server/src/rooms.ts:stateFrame` and the integration
+            // tests in `server/test/ws.*`). `frame` *is* the timer
+            // state with a discriminator added; pull the discriminator
+            // off and forward the rest. Earlier versions of this
+            // module read `frame.state` which never existed on the
+            // wire, so `setTimer(undefined)` quietly broke timer sync
+            // in production while demo mode (which used a wrapped
+            // shape) hid the bug locally.
+            const { type: _t, ...timer } = frame;
+            setTimer(timer);
             break;
-          case 'HELP_QUEUE':
-            setHelpQueue(frame.queue);
+          }
+          case 'HELP_QUEUE': {
+            // Same spread treatment as STATE — `HelpQueue` fields are
+            // hoisted onto the frame, no `queue` envelope.
+            const { type: _t, ...queue } = frame;
+            setHelpQueue(queue);
             break;
+          }
           case 'ERROR':
             setError({ code: frame.code, message: frame.message });
             break;

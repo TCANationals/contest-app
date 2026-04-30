@@ -1,16 +1,13 @@
 // Help-queue state machine (§7).
+//
+// `HelpQueue` and `HelpQueueEntry` describe the wire shape of the
+// HELP_QUEUE frame, which the SPA consumes as well, so the canonical
+// definitions live in `@tca-timer/shared/api`. They are re-exported
+// here so existing `import { HelpQueue } from './help-queue.js'`
+// callsites keep compiling.
 
-export interface HelpQueueEntry {
-  contestantId: string;
-  stationNumber: number | null;
-  requestedAtServerMs: number;
-}
-
-export interface HelpQueue {
-  room: string;
-  version: number;
-  entries: HelpQueueEntry[];
-}
+import type { HelpQueue, HelpQueueEntry } from '@tca-timer/shared/api';
+export type { HelpQueue, HelpQueueEntry };
 
 export function initialHelpQueue(room: string): HelpQueue {
   return { room, version: 0, entries: [] };

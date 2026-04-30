@@ -255,4 +255,66 @@ describe('WebSocket integration', () => {
     assert.equal(second.changed, false);
     assert.equal(second.queue.entries.length, 1);
   });
+
+  it('judge HELP_ACK delivers HELP_ACKED to the affected contestant only (§7.1)', async () => {
+    // Two contestants in the same room; one of them asks for help. A
+    // judge acks the request. The acked contestant MUST receive a
+    // HELP_ACKED frame so the overlay can clear `help_pending`. The
+    // OTHER contestant in the room MUST NOT receive that frame —
+    // HELP_ACKED is targeted, not a broadcast.
+    const erinUrl = `${baseUrl}/contestant?room=nationals-2026&id=erin&token=${token}`;
+    const frankUrl = `${baseUrl}/contestant?room=nationals-2026&id=frank&token=${token}`;
+    const erin = await open(erinUrl);
+    const frank = await open(frankUrl);
+
+    const ticket = ticketCache.mint({
+      sub: 'judge-1',
+      email: 'j@x',
+      groups: ['judges-admin'],
+    });
+    const judge = await open(`${baseUrl}/judge?room=nationals-2026&ticket=${ticket}`);
+
+    try {
+      // Drain the initial STATE frames so the post-ack reads are clean.
+      await nextFrame(erin);
+      await nextFrame(frank);
+      await nextFrame(judge);
+      await nextFrame(judge);
+
+      erin.ws.send(JSON.stringify({ type: 'HELP_REQUEST' }));
+      const hq = await waitForFrame(judge, (f) => f.type === 'HELP_QUEUE');
+      const ackVersion = hq.version as number;
+
+      judge.ws.send(
+        JSON.stringify({
+          type: 'HELP_ACK',
+          contestantId: 'erin',
+          version: ackVersion,
+        }),
+      );
+
+      const ackedFrame = await waitForFrame(erin, (f) => f.type === 'HELP_ACKED');
+      assert.equal(ackedFrame.type, 'HELP_ACKED');
+      assert.equal(ackedFrame.room, 'nationals-2026');
+      assert.equal(ackedFrame.contestantId, 'erin');
+      assert.equal(typeof ackedFrame.waitMs, 'number');
+      assert.equal(typeof ackedFrame.ackedAtServerMs, 'number');
+      // Queue version after the ack is one greater than the version
+      // the judge specified in HELP_ACK.
+      assert.equal(ackedFrame.version, ackVersion + 1);
+
+      // Frank shares the room but did NOT request help; the only
+      // frame to land on his socket between request and ack should
+      // have been an updated HELP_QUEUE (judges-only, so none) or a
+      // STATE retransmit. Wait briefly and then assert no
+      // HELP_ACKED reached him.
+      await new Promise((r) => setTimeout(r, 50));
+      const frankSawHelpAcked = frank.buffer.some((f) => f.type === 'HELP_ACKED');
+      assert.equal(frankSawHelpAcked, false);
+    } finally {
+      await close(erin);
+      await close(frank);
+      await close(judge);
+    }
+  });
 });

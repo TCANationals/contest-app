@@ -4,6 +4,7 @@ import { countdownStyle, formatCountdown } from '@tca-timer/shared';
 
 import { layoutForCorner } from './layout';
 import { computeRemainingMs, shouldFireAlarm, shouldFlash } from './timer';
+import { buildContestantUrl } from './url';
 import type {
   BootstrapPayload,
   PositionCorner,
@@ -153,7 +154,7 @@ export function Overlay() {
 
   useEffect(() => {
     if (!bootstrap || !bootstrap.config) return;
-    const url = buildContestantUrl(bootstrap);
+    const url = contestantUrlFromBootstrap(bootstrap);
     const client = new WsClient({
       url,
       onState: (s) => setTimer(s),
@@ -406,14 +407,14 @@ function ConfigError({
   );
 }
 
-function buildContestantUrl(b: BootstrapPayload): string {
+function contestantUrlFromBootstrap(b: BootstrapPayload): string {
   const cfg = b.config!;
-  const q = new URLSearchParams({
+  return buildContestantUrl({
     room: cfg.room,
-    id: b.contestantId,
-    token: cfg.roomToken,
+    contestantId: b.contestantId,
+    roomToken: cfg.roomToken,
+    serverHost: cfg.serverHost,
   });
-  return `wss://${cfg.serverHost}/contestant?${q.toString()}`;
 }
 
 function playAlarm(

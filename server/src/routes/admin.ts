@@ -3,7 +3,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
 
-import { verifyCfAccessJwt, type JudgeIdentity } from '../auth/cf-jwt.js';
+import {
+  verifyCfAccessJwt,
+  isDevAuthBypassEnabled,
+  devAuthBypassIdentity,
+  type JudgeIdentity,
+} from '../auth/cf-jwt.js';
 import { hashRoomToken, ROOM_ID_REGEX } from '../auth/room-token.js';
 import {
   insertRoom,
@@ -17,19 +22,25 @@ async function requireAdmin(
   reply: FastifyReply,
 ): Promise<JudgeIdentity | null> {
   if (!req.judgeIdentity) {
-    const headerJwt = req.headers['cf-access-jwt-assertion'] as string | undefined;
-    const cookie = (req as FastifyRequest & { cookies?: Record<string, string> }).cookies
-      ?.CF_Authorization;
-    const jwt = headerJwt || cookie;
-    if (!jwt) {
-      void reply.code(401).send({ error: 'missing_jwt' });
-      return null;
-    }
-    try {
-      req.judgeIdentity = await verifyCfAccessJwt(jwt);
-    } catch (err) {
-      void reply.code(401).send({ error: 'bad_jwt', detail: (err as Error).message });
-      return null;
+    // Dev-only bypass — see `auth/cf-jwt.ts`. The synthetic identity
+    // includes `judges-admin` by default so admin routes work in dev.
+    if (isDevAuthBypassEnabled()) {
+      req.judgeIdentity = devAuthBypassIdentity();
+    } else {
+      const headerJwt = req.headers['cf-access-jwt-assertion'] as string | undefined;
+      const cookie = (req as FastifyRequest & { cookies?: Record<string, string> }).cookies
+        ?.CF_Authorization;
+      const jwt = headerJwt || cookie;
+      if (!jwt) {
+        void reply.code(401).send({ error: 'missing_jwt' });
+        return null;
+      }
+      try {
+        req.judgeIdentity = await verifyCfAccessJwt(jwt);
+      } catch (err) {
+        void reply.code(401).send({ error: 'bad_jwt', detail: (err as Error).message });
+        return null;
+      }
     }
   }
   if (!req.judgeIdentity.groups.includes('judges-admin')) {

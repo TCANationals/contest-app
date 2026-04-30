@@ -35,6 +35,47 @@ export function loadCfJwtConfig(): CfJwtConfig | null {
   return { aud, issuer, jwksUrl };
 }
 
+// ---------------------------------------------------------------------------
+// Dev-only auth bypass.
+//
+// `docker compose up` and host-side `npm run dev` both run without a real
+// Cloudflare Access edge in front of the server, so every `/api/judge/*` call
+// would otherwise return 401 missing_jwt and the SPA can't be exercised end
+// to end. Setting `DEV_AUTH_BYPASS=1` (the docker-compose dev profile sets
+// this by default) makes `requireJudge` / `requireAdmin` return a synthetic
+// identity instead of verifying a JWT.
+//
+// Hard guard: this never activates when `NODE_ENV=production`, even if the
+// flag is somehow set, so a misconfigured deploy can't accidentally drop
+// auth. The Railway deploy template uses `NODE_ENV=production`.
+//
+// Customization (all optional):
+//   * `DEV_AUTH_SUB`    — JWT `sub`. Default: `dev-judge`.
+//   * `DEV_AUTH_EMAIL`  — `email` claim. Default: `dev@local.test`.
+//   * `DEV_AUTH_GROUPS` — comma-separated group list. Default:
+//                         `judges-admin` so dev sessions can hit
+//                         `/api/admin/*` routes too.
+// ---------------------------------------------------------------------------
+
+export function isDevAuthBypassEnabled(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  const flag = process.env.DEV_AUTH_BYPASS;
+  return flag === '1' || flag === 'true';
+}
+
+export function devAuthBypassIdentity(): JudgeIdentity {
+  const sub = process.env.DEV_AUTH_SUB || 'dev-judge';
+  const email = process.env.DEV_AUTH_EMAIL || 'dev@local.test';
+  const rawGroups = process.env.DEV_AUTH_GROUPS;
+  const groups = rawGroups
+    ? rawGroups
+        .split(',')
+        .map((g) => g.trim())
+        .filter((g) => g.length > 0)
+    : ['judges-admin'];
+  return { sub, email, groups };
+}
+
 /**
  * Verify a Cloudflare Access JWT and return the judge identity.
  * Throws on any failure (expired, wrong audience, bad signature, etc.).

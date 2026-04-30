@@ -10,7 +10,10 @@ import {
   broadcastState,
   broadcastHelpQueueToJudges,
   helpQueueFrame,
+  notifyContestantHelpAcked,
   stateFrame,
+  pongFrame,
+  errorFrame,
   safeSend,
   writeAudit,
   persistTimer,
@@ -130,7 +133,7 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
       const t0 = typeof msg.t0 === 'number' ? msg.t0 : 0;
       const t1 = Date.now();
       const t2 = Date.now();
-      safeSend(socket, JSON.stringify({ type: 'PONG', t0, t1, t2 }));
+      safeSend(socket, pongFrame(t0, t1, t2));
       return;
     }
 
@@ -206,6 +209,16 @@ function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer):
       });
 
       broadcastHelpQueueToJudges(ctx.room);
+      // §7.1: tell the affected contestant their help_pending state
+      // has cleared. Without this, the overlay's button stays stuck in
+      // the "pending" color until the contestant manually toggles it.
+      notifyContestantHelpAcked(
+        ctx.room,
+        contestantId,
+        ctx.room.helpQueue.version,
+        res.waitMs ?? 0,
+        now,
+      );
       return;
     }
 
@@ -275,7 +288,7 @@ function timerAuditPayload(
 }
 
 function sendError(socket: WebSocket, code: string, message: string): void {
-  safeSend(socket, JSON.stringify({ type: 'ERROR', code, message }));
+  safeSend(socket, errorFrame(code, message));
 }
 
 function closeWith(socket: WebSocket, code: number, reason: string): void {
