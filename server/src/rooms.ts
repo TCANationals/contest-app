@@ -1,16 +1,34 @@
-// In-memory RoomState map (§11.5). Stub for scaffolding.
+// RoomState (§11.5) — in-memory source of truth for one room's timer and
+// help queue, with mutation discipline per §11.5:
+//   1) mutate in-memory
+//   2) begin async DB write
+//   3) broadcast STATE / HELP_QUEUE (never await the DB write)
 
 import type { WebSocket } from 'ws';
-import { initialHelpQueue, type HelpQueue } from './help-queue.js';
+import { initialHelpQueue, type HelpQueue, isInQueue } from './help-queue.js';
 import { initialTimerState, type TimerState } from './timer.js';
+import {
+  insertAuditEvent,
+  upsertTimerState,
+  enqueueRetry,
+  isDbDegraded,
+  loadTimerState,
+  type AuditEvent,
+} from './db/dal.js';
 
 export interface RoomState {
+  id: string;
   timer: TimerState;
   helpQueue: HelpQueue;
   contestants: Set<WebSocket>;
   judges: Set<WebSocket>;
-  notifyJobs: Map<string, NodeJS.Timeout>;
+  contestantIdBySocket: WeakMap<WebSocket, string>;
+  notifyJobs: Map<string, { cancel: () => void }>;
   judgeAckedAt: Map<string, number>;
+  offlineHelpLastPing: Map<string, number>;
+  // Lightweight LRU of recently disconnected contestant IDs so that
+  // reconnects during the 90s heartbeat window don't lose their pending
+  // help-call if any. (Not strictly required by the spec; harmless.)
 }
 
 const rooms = new Map<string, RoomState>();
@@ -19,12 +37,15 @@ export function getOrCreateRoomState(roomId: string): RoomState {
   let state = rooms.get(roomId);
   if (!state) {
     state = {
+      id: roomId,
       timer: initialTimerState(roomId),
       helpQueue: initialHelpQueue(roomId),
       contestants: new Set(),
       judges: new Set(),
+      contestantIdBySocket: new WeakMap(),
       notifyJobs: new Map(),
       judgeAckedAt: new Map(),
+      offlineHelpLastPing: new Map(),
     };
     rooms.set(roomId, state);
   }
@@ -38,3 +59,89 @@ export function getRoomState(roomId: string): RoomState | undefined {
 export function allRoomStates(): ReadonlyMap<string, RoomState> {
   return rooms;
 }
+
+// ---------------------------------------------------------------------------
+// Broadcasts
+// ---------------------------------------------------------------------------
+
+export function stateFrame(state: TimerState, connectedContestants: number): string {
+  return JSON.stringify({
+    type: 'STATE',
+    ...state,
+    connectedContestants,
+    dbDegraded: isDbDegraded(),
+  });
+}
+
+export function helpQueueFrame(queue: HelpQueue): string {
+  return JSON.stringify({
+    type: 'HELP_QUEUE',
+    ...queue,
+  });
+}
+
+export function broadcastState(room: RoomState): void {
+  const frame = stateFrame(room.timer, room.contestants.size);
+  for (const s of room.contestants) safeSend(s, frame);
+  for (const s of room.judges) safeSend(s, frame);
+}
+
+export function broadcastHelpQueueToJudges(room: RoomState): void {
+  const frame = helpQueueFrame(room.helpQueue);
+  for (const s of room.judges) safeSend(s, frame);
+}
+
+export function safeSend(socket: WebSocket, frame: string): void {
+  try {
+    if (socket.readyState === 1 /* OPEN */) socket.send(frame);
+  } catch {
+    /* ignore */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Persistence helpers. Every state-changing operation SHOULD call these two
+// helpers after mutating in-memory state.
+// ---------------------------------------------------------------------------
+
+export function persistTimer(state: TimerState): void {
+  const snapshot = { ...state };
+  (async () => {
+    try {
+      await upsertTimerState(snapshot);
+    } catch {
+      enqueueRetry(() => upsertTimerState(snapshot));
+    }
+  })();
+}
+
+export function writeAudit(ev: AuditEvent): void {
+  (async () => {
+    try {
+      await insertAuditEvent(ev);
+    } catch {
+      enqueueRetry(() => insertAuditEvent(ev));
+    }
+  })();
+}
+
+// ---------------------------------------------------------------------------
+// Post-restart warm-up: load timer_state rows for any rooms that have them.
+// ---------------------------------------------------------------------------
+
+export async function rehydrateFromDb(roomIds: string[]): Promise<void> {
+  for (const id of roomIds) {
+    const state = getOrCreateRoomState(id);
+    const loaded = await loadTimerState(id).catch(() => null);
+    if (loaded) state.timer = loaded;
+  }
+}
+
+// Test-only reset.
+export function _resetRooms(): void {
+  rooms.clear();
+}
+
+// Re-export so downstream modules don't need to reach into help-queue.ts
+// directly when they already have RoomState.
+export { isInQueue };
