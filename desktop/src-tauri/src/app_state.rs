@@ -75,13 +75,19 @@ impl AppState {
     }
 
     pub fn set_connected(&self, connected: bool) {
-        let mut g = self.inner.lock().expect("AppState poisoned");
-        g.connected = connected;
-        if connected
-            && g.help_queued_offline
-            && !g.help_pending
-            && (self.effects.send_help_request)()
-        {
+        // Decide whether a queued offline help-request should now be
+        // flushed, then DROP the guard before invoking the effect. The
+        // effect is a user-provided closure that may re-enter AppState
+        // (e.g., via `mark_help_pending` or in a test spy), which would
+        // deadlock if we still held the mutex. Mirrors the pattern in
+        // `do_help_request` / `do_help_cancel`.
+        let should_flush = {
+            let mut g = self.inner.lock().expect("AppState poisoned");
+            g.connected = connected;
+            connected && g.help_queued_offline && !g.help_pending
+        };
+        if should_flush && (self.effects.send_help_request)() {
+            let mut g = self.inner.lock().expect("AppState poisoned");
             g.help_pending = true;
             g.help_queued_offline = false;
         }

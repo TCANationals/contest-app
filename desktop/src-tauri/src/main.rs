@@ -210,10 +210,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let prefs = MenuItem::with_id(app, "prefs", "Preferences\u{2026}", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let sep = PredefinedMenuItem::separator(app)?;
+    // Native menu toolkits (GTK on Linux, Cocoa on macOS) only allow a
+    // menu item to appear at one position in a menu hierarchy, so each
+    // separator needs its own instance.
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&show, &hide, &position, &sep, &prefs, &sep, &quit],
+        &[&show, &hide, &position, &sep1, &prefs, &sep2, &quit],
     )?;
 
     let app_for_tray = app.clone();
