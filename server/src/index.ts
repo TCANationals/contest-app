@@ -15,6 +15,7 @@ import { listActiveRooms } from './db/dal.js';
 import { rehydrateFromDb, allRoomStates } from './rooms.js';
 import { startClockDriftMonitor } from './clock.js';
 import { startRetentionJob } from './retention.js';
+import { startRetryDrain } from './db/retry-drain.js';
 import { IpConnectionLimiter } from './ratelimit.js';
 
 export async function buildServer() {
@@ -79,9 +80,11 @@ async function main() {
     }
   }
 
-  // Background jobs. Both are no-ops without DB access.
+  // Background jobs. The clock sampler + retention job are no-ops without
+  // DB access; the retry drain only does work when the ring is non-empty.
   startClockDriftMonitor((msg, extra) => app.log.warn({ extra }, msg));
   startRetentionJob((msg, extra) => app.log.info({ extra }, msg));
+  startRetryDrain((msg, extra) => app.log.warn({ extra }, msg));
 
   try {
     await app.listen({ host: '0.0.0.0', port });
