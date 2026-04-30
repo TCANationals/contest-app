@@ -194,7 +194,12 @@ fn apply_visibility(app: &AppHandle, visible: bool) {
     }
 }
 
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+/// Shared current-corner state. Written whenever the tray menu reposition
+/// option is used; read by the scale-factor handler so multi-monitor /
+/// DPI-change events re-pin to the user's latest choice (§9.2).
+pub type CurrentCorner = Arc<Mutex<Corner>>;
+
+fn build_tray(app: &AppHandle, current_corner: CurrentCorner) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
     let pos_tl = MenuItem::with_id(app, "pos-tl", "Top left", true, None::<&str>)?;
@@ -221,12 +226,20 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     let app_for_tray = app.clone();
+    let corner_for_tray = current_corner.clone();
     let _tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("TCA Timer")
         .on_menu_event(move |_icon, event| {
             let id = event.id().0.as_str();
+            let reposition = |c: Corner, label: &'static str| {
+                apply_corner(&app_for_tray, c);
+                *corner_for_tray
+                    .lock()
+                    .expect("current-corner mutex poisoned") = c;
+                let _ = app_for_tray.emit("overlay:set-corner", label);
+            };
             match id {
                 "show" => {
                     apply_visibility(&app_for_tray, true);
@@ -236,22 +249,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     apply_visibility(&app_for_tray, false);
                     let _ = app_for_tray.emit("overlay:set-visible", false);
                 }
-                "pos-tl" => {
-                    apply_corner(&app_for_tray, Corner::TopLeft);
-                    let _ = app_for_tray.emit("overlay:set-corner", "topLeft");
-                }
-                "pos-tr" => {
-                    apply_corner(&app_for_tray, Corner::TopRight);
-                    let _ = app_for_tray.emit("overlay:set-corner", "topRight");
-                }
-                "pos-bl" => {
-                    apply_corner(&app_for_tray, Corner::BottomLeft);
-                    let _ = app_for_tray.emit("overlay:set-corner", "bottomLeft");
-                }
-                "pos-br" => {
-                    apply_corner(&app_for_tray, Corner::BottomRight);
-                    let _ = app_for_tray.emit("overlay:set-corner", "bottomRight");
-                }
+                "pos-tl" => reposition(Corner::TopLeft, "topLeft"),
+                "pos-tr" => reposition(Corner::TopRight, "topRight"),
+                "pos-bl" => reposition(Corner::BottomLeft, "bottomLeft"),
+                "pos-br" => reposition(Corner::BottomRight, "bottomRight"),
                 "prefs" => {
                     let _ = app_for_tray.emit("overlay:open-preferences", ());
                 }
@@ -269,7 +270,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 fn main() {
     let b = bootstrap();
     let initial_visible = !b.prefs.hidden;
-    let initial_corner = b.prefs.position.corner;
+    let current_corner: CurrentCorner = Arc::new(Mutex::new(b.prefs.position.corner));
     let prefs_action_log = format!("{:?}", b.prefs_action);
 
     tauri::Builder::default()
@@ -302,19 +303,31 @@ fn main() {
                 apply_visibility(&handle, false);
             }
 
-            apply_corner(&handle, initial_corner);
+            apply_corner(
+                &handle,
+                *current_corner
+                    .lock()
+                    .expect("current-corner mutex poisoned"),
+            );
 
-            if let Err(err) = build_tray(&handle) {
+            if let Err(err) = build_tray(&handle, current_corner.clone()) {
                 eprintln!("tca-timer: tray init failed: {err}");
             }
 
-            // Re-pin to configured corner whenever the monitor setup
-            // changes (§9.2 "Multi-monitor").
+            // Re-pin to whichever corner the user most recently chose
+            // whenever the monitor setup changes (§9.2 "Multi-monitor").
+            // Reading from the shared `CurrentCorner` means a tray
+            // reposition made after launch survives later DPI / display
+            // events.
             if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
                 let handle_for_scale = handle.clone();
+                let corner_for_scale = current_corner.clone();
                 w.on_window_event(move |event| {
                     if matches!(event, WindowEvent::ScaleFactorChanged { .. }) {
-                        apply_corner(&handle_for_scale, initial_corner);
+                        let c = *corner_for_scale
+                            .lock()
+                            .expect("current-corner mutex poisoned");
+                        apply_corner(&handle_for_scale, c);
                     }
                 });
             }
