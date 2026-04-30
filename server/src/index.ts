@@ -58,7 +58,25 @@ export async function buildServer() {
   registerJudgeWs(app);
   registerContestantWs(app);
 
+  // Background jobs. All three are no-ops when there's nothing to do, so
+  // they're safe to start even in tests. Critically, we own the stop
+  // handles so `app.close()` shuts them down cleanly — otherwise their
+  // callbacks could fire after the DB pool has been ended and throw
+  // unhandled errors during graceful shutdown / test teardown.
+  const stops: Array<() => void> = [
+    startClockDriftMonitor((msg, extra) => app.log.warn({ extra }, msg)),
+    startRetentionJob((msg, extra) => app.log.info({ extra }, msg)),
+    startRetryDrain((msg, extra) => app.log.warn({ extra }, msg)),
+  ];
+
   app.addHook('onClose', async () => {
+    for (const stop of stops) {
+      try {
+        stop();
+      } catch {
+        /* best effort */
+      }
+    }
     await closePool().catch(() => {});
   });
 
@@ -79,12 +97,6 @@ async function main() {
       app.log.warn({ err }, 'room rehydration skipped');
     }
   }
-
-  // Background jobs. The clock sampler + retention job are no-ops without
-  // DB access; the retry drain only does work when the ring is non-empty.
-  startClockDriftMonitor((msg, extra) => app.log.warn({ extra }, msg));
-  startRetentionJob((msg, extra) => app.log.info({ extra }, msg));
-  startRetryDrain((msg, extra) => app.log.warn({ extra }, msg));
 
   try {
     await app.listen({ host: '0.0.0.0', port });
