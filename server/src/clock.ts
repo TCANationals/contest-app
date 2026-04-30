@@ -14,6 +14,16 @@ export const CLOCK_DRIFT_THRESHOLD_MS = 200;
 export const CLOCK_DRIFT_SAMPLE_INTERVAL_MS = 5 * 60 * 1000;
 export const CLOCK_DRIFT_SAMPLE_URL = 'https://time.cloudflare.com';
 
+/**
+ * The HTTP `Date` header is only second-precision (RFC 7231 §7.1.1.1), so the
+ * parsed ms value is the *start* of the second the server was in when it
+ * generated the response. The server's actual clock at that instant lies
+ * anywhere in `[serverMs, serverMs + 1000)`. We correct for that by using
+ * the midpoint (`serverMs + 500`) as our point estimate; the remaining
+ * quantization uncertainty is ±500 ms.
+ */
+export const HTTP_DATE_QUANTIZATION_MS = 500;
+
 export async function sampleClockDriftOnce(
   url: string = CLOCK_DRIFT_SAMPLE_URL,
 ): Promise<number | null> {
@@ -23,14 +33,28 @@ export async function sampleClockDriftOnce(
     const t3 = Date.now();
     const header = res.headers.get('date');
     if (!header) return null;
-    const serverMs = Date.parse(header);
-    if (!Number.isFinite(serverMs)) return null;
+    const serverMsStart = Date.parse(header);
+    if (!Number.isFinite(serverMsStart)) return null;
+    const serverMs = serverMsStart + HTTP_DATE_QUANTIZATION_MS;
     const rtt = t3 - t0;
     const localMid = t0 + rtt / 2;
     return localMid - serverMs;
   } catch {
     return null;
   }
+}
+
+/**
+ * Returns true only when the measured drift's uncertainty band is entirely
+ * outside the ±threshold tolerance. Consumes the ±HTTP_DATE_QUANTIZATION_MS
+ * quantization as additional slack, so a perfectly-synced host never trips
+ * the warning.
+ */
+export function isDriftSignificant(
+  driftMs: number,
+  threshold: number = CLOCK_DRIFT_THRESHOLD_MS,
+): boolean {
+  return Math.abs(driftMs) > threshold + HTTP_DATE_QUANTIZATION_MS;
 }
 
 /**
@@ -75,7 +99,7 @@ export function startClockDriftMonitor(
     void (async () => {
       const drift = await sampleClockDriftOnce();
       if (drift == null) return;
-      if (Math.abs(drift) > CLOCK_DRIFT_THRESHOLD_MS) {
+      if (isDriftSignificant(drift)) {
         log('system_clock_warn', { driftMs: drift });
         await logClockDriftWarning(drift, log);
       }
