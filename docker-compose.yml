@@ -71,6 +71,11 @@ services:
       - ./server:/app:rw
       - ./shared:/shared:rw
       - server_node_modules:/app/node_modules
+      # Same trick as `/app/node_modules`: the bind mount above would
+      # otherwise hide `/shared/node_modules` (populated inside the
+      # image by `npm ci` in `shared/Dockerfile.dev`-style steps), and
+      # without it the shared package's own deps (zod) are unreachable.
+      - shared_node_modules:/shared/node_modules
     restart: "no"
 
   # One-shot service: idempotently inserts a single well-known room
@@ -95,6 +100,7 @@ services:
       - ./server:/app:rw
       - ./shared:/shared:rw
       - server_node_modules:/app/node_modules
+      - shared_node_modules:/shared/node_modules
     restart: "no"
 
   server:
@@ -143,6 +149,12 @@ services:
       # the container with whatever the host (potentially macOS or
       # Windows) has installed locally.
       - server_node_modules:/app/node_modules
+      # Same trick for the shared package: the `./shared:/shared` bind
+      # mount above would otherwise mask the `/shared/node_modules`
+      # that the Dockerfile populates via `npm ci`, leaving the
+      # shared package's own deps (zod) unreachable on hosts that
+      # don't run `npm install` inside `shared/` themselves.
+      - shared_node_modules:/shared/node_modules
     healthcheck:
       test:
         ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz || exit 1"]
@@ -180,8 +192,17 @@ services:
       # edits as well.
       - ./shared:/shared:rw
       - spa_node_modules:/app/node_modules
+      # See the matching mount on `server` for rationale: keep the
+      # image's `/shared/node_modules` (zod et al.) intact under the
+      # `./shared` bind mount above.
+      - shared_node_modules:/shared/node_modules
 
 volumes:
   tca_timer_pgdata:
   server_node_modules:
   spa_node_modules:
+  # Holds the linux-x64 install of `shared/`'s own runtime deps so the
+  # `./shared:/shared` bind mount used by every consumer service
+  # doesn't shadow them with the host-side (possibly empty / macOS /
+  # Windows) `shared/node_modules` directory.
+  shared_node_modules:

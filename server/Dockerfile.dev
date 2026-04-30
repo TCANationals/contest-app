@@ -22,8 +22,19 @@ RUN apk add --no-cache git bash
 # /app resolves correctly during `npm ci`. Only the files needed at
 # runtime are copied — `package.json` plus the TypeScript sources that
 # tsx will transpile on the fly.
+#
+# We also `npm ci` inside /shared so that the package's own runtime
+# deps (notably `zod`, used by `@tca-timer/shared/api`) are available
+# when the server resolves them through the symlink that
+# `npm ci` creates at /app/node_modules/@tca-timer/shared. Without
+# this, tsx (`preserveSymlinks: false` by default) walks the real
+# /shared/node_modules path and crashes at startup with
+# `Cannot find package 'zod'`. The compose file additionally mounts
+# a named volume at /shared/node_modules so the host-side
+# `./shared:/shared` bind mount doesn't clobber what we install here.
 WORKDIR /shared
-COPY shared/package.json ./
+COPY shared/package.json shared/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY shared/src ./src
 
 WORKDIR /app
