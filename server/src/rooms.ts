@@ -118,11 +118,30 @@ export function persistTimer(state: TimerState): void {
 }
 
 export function writeAudit(ev: AuditEvent): void {
+  // Snapshot the event before we hand it off to the async path. If the
+  // caller later mutates `ev.payload` (or reuses the same object for a
+  // different event) while our INSERT is in flight or parked on the
+  // retry ring, we must still persist the values that were true at the
+  // time the event was written. This mirrors the defensive copy that
+  // `persistTimer` already performs on the `TimerState` snapshot.
+  const snapshot: AuditEvent = {
+    room: ev.room,
+    atServerMs: ev.atServerMs,
+    actorSub: ev.actorSub,
+    actorEmail: ev.actorEmail,
+    eventType: ev.eventType,
+    payload:
+      ev.payload == null
+        ? {}
+        : typeof ev.payload === 'object'
+          ? structuredClone(ev.payload)
+          : ev.payload,
+  };
   (async () => {
     try {
-      await insertAuditEvent(ev);
+      await insertAuditEvent(snapshot);
     } catch {
-      enqueueRetry(() => insertAuditEvent(ev));
+      enqueueRetry(() => insertAuditEvent(snapshot));
     }
   })();
 }
