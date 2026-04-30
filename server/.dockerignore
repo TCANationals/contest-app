@@ -1,0 +1,10 @@
+# Files we don't need inside the dev image. The compose file bind-mounts
+# the source tree on top of /app at runtime anyway, so this only matters
+# for the one-time `docker compose build` snapshot.
+node_modules
+dist
+coverage
+.env
+.env.*
+.DS_Store
+*.log
