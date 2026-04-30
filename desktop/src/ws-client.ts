@@ -194,11 +194,13 @@ export class WsClient {
 
   private scheduleReconnect(): void {
     if (this.closed) return;
-    const baseIdx = Math.min(
-      this.attempt,
-      BACKOFF_BASE_SCHEDULE_MS.length - 1,
-    );
-    const base = BACKOFF_BASE_SCHEDULE_MS[baseIdx] ?? BACKOFF_CAP_MS;
+    // §6.4: base delays 1, 2, 4, 8, 16 s, capped at 30 s thereafter.
+    // Once the schedule is exhausted, clamp to the cap so sustained
+    // outages don't stick at 16 s forever.
+    const base =
+      this.attempt < BACKOFF_BASE_SCHEDULE_MS.length
+        ? BACKOFF_BASE_SCHEDULE_MS[this.attempt]!
+        : BACKOFF_CAP_MS;
     const capped = Math.min(base, BACKOFF_CAP_MS);
     const jittered = Math.floor(Math.random() * capped);
     this.attempt += 1;

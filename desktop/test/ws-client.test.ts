@@ -194,4 +194,37 @@ describe('WsClient', () => {
 
     c.stop();
   });
+
+  it('backoff climbs to the 30s cap once the base schedule is exhausted', () => {
+    // §6.4: base delays 1, 2, 4, 8, 16 s, capped at 30 s thereafter.
+    // Pin `Math.random()` to 0.5 so jittered = base / 2 exactly; step
+    // through reconnect attempts and check that once the base schedule
+    // is exhausted the delay grows to the 30 s cap (not stuck at 16 s).
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const c = new WsClient({
+      url: 'wss://h',
+      onState: () => undefined,
+      onStatus: () => undefined,
+      onOffset: () => undefined,
+      WebSocketImpl: asWSImpl(),
+    });
+    c.start();
+
+    // Expected base delays; jittered = base * 0.5. The last two
+    // entries would be 16_000 if the bug were present; they must be
+    // 30_000 for the cap to apply.
+    const expectedBases = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+    for (const base of expectedBases) {
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!;
+      ws.simulateServerClose();
+      const before = FakeWebSocket.instances.length;
+      const jittered = base * 0.5;
+      vi.advanceTimersByTime(jittered - 1);
+      expect(FakeWebSocket.instances.length).toBe(before);
+      vi.advanceTimersByTime(1);
+      expect(FakeWebSocket.instances.length).toBe(before + 1);
+    }
+
+    c.stop();
+  });
 });
