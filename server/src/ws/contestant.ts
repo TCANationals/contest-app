@@ -183,17 +183,26 @@ async function handleHelpRequest(ctx: ContestantSocketCtx): Promise<void> {
   }
 
 
-  // Look up the station number after the state change is committed. Any
-  // mismatch triggers a follow-up broadcast so judges see the station
-  // info once it's available.
+  // Look up the station number after the state change is committed. If
+  // we get one, replace the queue with a new immutable copy that carries
+  // the station number AND a bumped version, then rebroadcast so any
+  // version-deduping client picks up the change. Mutating the existing
+  // entry in place would leave `queue.version` unchanged and clients
+  // that short-circuit on a seen version would miss the station number.
   const station = await getStationNumber(ctx.room.id, ctx.contestantId).catch(() => null);
-  if (station != null) {
-    const entry = ctx.room.helpQueue.entries.find((e) => e.contestantId === ctx.contestantId);
-    if (entry && entry.stationNumber !== station) {
-      entry.stationNumber = station;
-      broadcastHelpQueueToJudges(ctx.room);
-    }
-  }
+  if (station == null) return;
+  const idx = ctx.room.helpQueue.entries.findIndex((e) => e.contestantId === ctx.contestantId);
+  if (idx < 0) return;
+  const current = ctx.room.helpQueue.entries[idx]!;
+  if (current.stationNumber === station) return;
+  const nextEntries = [...ctx.room.helpQueue.entries];
+  nextEntries[idx] = { ...current, stationNumber: station };
+  ctx.room.helpQueue = {
+    ...ctx.room.helpQueue,
+    version: ctx.room.helpQueue.version + 1,
+    entries: nextEntries,
+  };
+  broadcastHelpQueueToJudges(ctx.room);
 }
 
 function handleHelpCancel(ctx: ContestantSocketCtx): void {
