@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 
 import { countdownStyle } from './colors';
 import { formatCountdown } from './format';
+import { layoutForCorner } from './layout';
 import { computeRemainingMs, shouldFireAlarm, shouldFlash } from './timer';
 import type {
   BootstrapPayload,
+  PositionCorner,
   Preferences,
   TimerState,
 } from './types';
@@ -69,6 +71,15 @@ export function Overlay() {
   const [offsetMs, setOffsetMs] = useState(0);
   const [connected, setConnected] = useState(false);
   const [visible, setVisible] = useState(true);
+  // Mirrors the Tauri-side `current_corner`: which screen corner the
+  // overlay window is anchored to. We hug that same corner with our
+  // flex alignment so the digits sit right against the screen edge
+  // (`EDGE_MARGIN` away in the host code) instead of floating in the
+  // middle of the 380×96 window. Defaults to `bottomRight` to match
+  // the default Preferences corner — the bootstrap payload below
+  // overrides it as soon as it lands, and the
+  // `overlay:set-corner` event tracks subsequent tray-driven moves.
+  const [corner, setCorner] = useState<PositionCorner>('bottomRight');
   // `renderTick` exists purely to force a re-render every 250 ms so the
   // derived `displayMs` below re-evaluates against the wall clock. Its
   // value is ignored.
@@ -91,6 +102,7 @@ export function Overlay() {
         if (!cancelled) {
           setBootstrap(payload);
           setVisible(!payload.preferences.hidden);
+          setCorner(payload.preferences.position.corner);
         }
       })
       .catch((err) => {
@@ -124,6 +136,17 @@ export function Overlay() {
         await tauriListen<void>('overlay:send-help-cancel', () => {
           const client = clientRef.current;
           if (client) client.sendHelpCancel();
+        }),
+      );
+      unlisteners.push(
+        await tauriListen<PositionCorner>('overlay:set-corner', (c) => {
+          // Tauri side emits one of the four PositionCorner literals
+          // ('topLeft' / 'topRight' / 'bottomLeft' / 'bottomRight')
+          // whenever the tray reposition action moves the window.
+          // We intentionally do NOT cross-validate the value here:
+          // unknown values fall through to the default styles used
+          // below.
+          setCorner(c);
         }),
       );
     })().catch(() => undefined);
@@ -262,16 +285,33 @@ export function Overlay() {
       ? '--:--'
       : formatCountdown(displayMs);
 
+  // Flex alignment derived from the current screen corner. The Tauri
+  // host pins the *window* `EDGE_MARGIN` away from the named screen
+  // corner (e.g. bottom-left of the screen → bottom-left of the window
+  // is 24px from the screen's bottom-left); we mirror that anchoring
+  // *inside* the window so the visual content also hugs that edge.
+  // Examples:
+  //   topLeft     → contentleft, top      (digits in the window's top-left)
+  //   topRight    → contentright, top     (digits in the window's top-right)
+  //   bottomLeft  → contentleft, bottom
+  //   bottomRight → contentright, bottom
+  // Without this the 380×96 window centred its content, leaving the
+  // digits floating ~80px+ inside whichever screen corner the window
+  // was pinned to — which looks like a misaligned overlay.
+  const cornerLayout = layoutForCorner(corner);
+
   return (
     <div
       data-testid="overlay"
+      data-corner={corner}
       style={{
         opacity,
         padding: '8px 12px',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
+        alignItems: cornerLayout.alignItems,
+        justifyContent: cornerLayout.justifyContent,
+        textAlign: cornerLayout.textAlign,
         width: '100%',
         height: '100%',
         boxSizing: 'border-box',
