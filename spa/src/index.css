@@ -1,3 +1,12 @@
+/*
+ * Bundle JetBrains Mono with the SPA so the countdown digits, contestant IDs,
+ * and other monospaced surfaces look identical for every judge — even on
+ * machines that don't have the font installed locally. We pull only the two
+ * weights the UI actually uses (400 + 700) to keep the bundle small.
+ */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
