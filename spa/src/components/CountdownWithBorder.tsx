@@ -1,25 +1,33 @@
 import type { CSSProperties } from 'react';
 
-import type { TimerStatus } from '../store/types';
+import {
+  countdownStyle as sharedCountdownStyle,
+  formatCountdown as sharedFormatCountdown,
+  formatMs as sharedFormatMs,
+} from '@tca-timer/shared';
+import type {
+  CountdownStyle,
+  TimerStatus,
+} from '@tca-timer/shared';
 
 /**
- * Shared digit renderer for desktop overlay (§9.2.4) and projector (§10.5).
+ * Shared digit renderer for desktop overlay (§9.2.4) and projector
+ * (§10.5).
  *
- * Color states (§9.2 priorities):
- *   idle                      → gray (#888), "--:--" text
- *   paused                    → white, "PAUSED" pill beneath
- *   running > 5 minutes       → green (#16A34A)
- *   running 1–5 minutes       → amber (#F59E0B)
- *   running < 1 minute        → red (#DC2626) + 1 Hz pulse
+ * The color/border/pulse decision and the digit formatter both live
+ * in `@tca-timer/shared` so the SPA and the contestant overlay can
+ * never drift; this file is the SPA-side React layout that wraps
+ * those pure functions with Tailwind classes and `8vw` responsive
+ * sizing. The overlay does its own React layout for its fixed
+ * 380×96 transparent window.
  *
- * Each color pairs with an inverse-color outline ≥ 2 px (§9.2 contrast border).
+ * The pure helpers below (`resolveCountdownStyle`, `formatCountdown`,
+ * `formatMs`) are re-exported under their historical SPA names so
+ * existing imports keep working — they're now thin aliases to the
+ * shared module.
  */
 
-export interface CountdownStyle {
-  color: string;
-  outline: string;
-  pulse: boolean;
-}
+export type { CountdownStyle };
 
 export interface CountdownWithBorderProps {
   status: TimerStatus;
@@ -35,43 +43,22 @@ export interface CountdownWithBorderProps {
   style?: CSSProperties;
 }
 
-export function resolveCountdownStyle(
-  status: TimerStatus,
-  remainingMs: number | null,
-): CountdownStyle {
-  if (status === 'idle') {
-    return { color: '#888888', outline: '#000000', pulse: false };
-  }
-  if (status === 'paused') {
-    return { color: '#FFFFFF', outline: '#000000', pulse: false };
-  }
-  // running
-  const ms = remainingMs ?? 0;
-  if (ms < 60_000) {
-    return { color: '#DC2626', outline: '#FFFFFF', pulse: true };
-  }
-  if (ms <= 5 * 60_000) {
-    return { color: '#F59E0B', outline: '#1A1A2E', pulse: false };
-  }
-  return { color: '#16A34A', outline: '#000000', pulse: false };
-}
+/**
+ * @deprecated Prefer `countdownStyle` from `@tca-timer/shared`. The
+ * old SPA name is kept here so existing imports keep compiling, but
+ * new code should consume the shared symbol directly.
+ */
+export const resolveCountdownStyle = sharedCountdownStyle;
 
-export function formatCountdown(
-  status: TimerStatus,
-  remainingMs: number | null,
-): string {
-  if (status === 'idle' || remainingMs == null) return '--:--';
-  return formatMs(remainingMs);
-}
+/**
+ * @deprecated Prefer `formatCountdown` from `@tca-timer/shared`.
+ */
+export const formatCountdown = sharedFormatCountdown;
 
-export function formatMs(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
+/**
+ * @deprecated Prefer `formatMs` from `@tca-timer/shared`.
+ */
+export const formatMs = sharedFormatMs;
 
 export function CountdownWithBorder({
   status,
@@ -82,8 +69,8 @@ export function CountdownWithBorder({
   className,
   style,
 }: CountdownWithBorderProps) {
-  const { color, outline, pulse } = resolveCountdownStyle(status, remainingMs);
-  const text = formatCountdown(status, remainingMs);
+  const { color, outline, pulse } = sharedCountdownStyle(status, remainingMs);
+  const text = sharedFormatCountdown(status, remainingMs);
 
   const classes = [
     'font-mono',

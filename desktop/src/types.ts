@@ -1,16 +1,9 @@
-export type TimerStatus = 'idle' | 'running' | 'paused';
-
-export interface TimerState {
-  room: string;
-  version: number;
-  status: TimerStatus;
-  endsAtServerMs: number | null;
-  remainingMs: number | null;
-  message: string;
-  setBySub: string;
-  setByEmail: string;
-  setAtServerMs: number;
-}
+// `TimerState` and `TimerStatus` are the wire shape of the §5.2 STATE
+// frame and are shared with the judge SPA. They live in
+// `@tca-timer/shared` so the two consumers cannot drift in their
+// understanding of the payload; re-export here to keep existing
+// `import type { TimerState } from './types'` callsites compiling.
+export type { TimerState, TimerStatus } from '@tca-timer/shared';
 
 export type PositionCorner =
   | 'topLeft'

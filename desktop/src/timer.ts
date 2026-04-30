@@ -1,19 +1,14 @@
-// §6.3 / §6.5: render-side timer math. Pure functions so the full logic
-// is covered by vitest without needing a Tauri / WS harness.
+// §6.3 / §6.5: render-side timer math. Pure functions so the full
+// logic is covered by vitest without needing a Tauri / WS harness.
+//
+// `computeRemainingMs` lives in `@tca-timer/shared` so the SPA and
+// the overlay render identically against the same time-sync math;
+// the alarm and flash decisions below are overlay-specific (§9.5)
+// and stay here.
 
 import type { TimerState } from './types';
 
-export function computeRemainingMs(
-  state: TimerState,
-  activeOffsetMs: number,
-  now: number = Date.now(),
-): number {
-  if (state.status === 'paused') return state.remainingMs ?? 0;
-  if (state.status === 'idle') return 0;
-  if (state.endsAtServerMs == null) return 0;
-  const serverNow = now + activeOffsetMs;
-  return Math.max(0, state.endsAtServerMs - serverNow);
-}
+export { computeRemainingMs } from '@tca-timer/shared';
 
 export interface AlarmDecisionInput {
   status: TimerState['status'];

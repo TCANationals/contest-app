@@ -1,37 +1,29 @@
-name: spa
+name: shared
 
 on:
   push:
     branches: [main]
     paths:
-      - 'spa/**'
       - 'shared/**'
-      - '.github/workflows/spa.yml'
+      - '.github/workflows/shared.yml'
   pull_request:
     paths:
-      - 'spa/**'
       - 'shared/**'
-      - '.github/workflows/spa.yml'
+      - '.github/workflows/shared.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: spa
+        working-directory: shared
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: spa/package-lock.json
+          cache-dependency-path: shared/package-lock.json
       - run: npm ci || npm install
       - run: npm run lint
       - run: npm test
-      - run: npm run build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: spa-dist
-          path: spa/dist
-          if-no-files-found: ignore

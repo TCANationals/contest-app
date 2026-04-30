@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { countdownStyle } from './colors';
-import { formatCountdown } from './format';
+import { countdownStyle, formatCountdown } from '@tca-timer/shared';
+
 import { layoutForCorner } from './layout';
 import { computeRemainingMs, shouldFireAlarm, shouldFlash } from './timer';
 import type {
@@ -274,10 +274,9 @@ export function Overlay() {
     );
   }
 
-  const text =
-    timer.status === 'idle' || displayMs == null
-      ? '--:--'
-      : formatCountdown(displayMs);
+  // `formatCountdown` returns '--:--' for idle / null on its own, so
+  // the explicit guard above is no longer necessary.
+  const text = formatCountdown(timer.status, displayMs);
 
   // Flex alignment derived from the current screen corner. The Tauri
   // host pins the *window* `EDGE_MARGIN` away from the named screen
@@ -320,7 +319,7 @@ export function Overlay() {
           fontSize: '48px',
           fontWeight: 700,
           color: style.color,
-          WebkitTextStroke: `2px ${style.border}`,
+          WebkitTextStroke: `2px ${style.outline}`,
           opacity: digitOpacity,
           transition: 'opacity 150ms linear',
           lineHeight: 1,

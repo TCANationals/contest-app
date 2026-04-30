@@ -18,6 +18,7 @@
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@tauri-apps/api": "^2.0.0",
+    "@tca-timer/shared": "file:../shared",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

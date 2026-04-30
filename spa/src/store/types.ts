@@ -1,20 +1,10 @@
-export type TimerStatus = 'idle' | 'running' | 'paused';
-
-export interface TimerState {
-  room: string;
-  version: number;
-  status: TimerStatus;
-  endsAtServerMs: number | null;
-  remainingMs: number | null;
-  message: string;
-  setBySub: string;
-  setByEmail: string;
-  setAtServerMs: number;
-  /** SPA-only field (§10.4): contestant overlays currently connected. */
-  connectedContestants?: number;
-  /** SPA-only field (§11.5): true when DB writes are degraded. */
-  dbDegraded?: boolean;
-}
+// `TimerState` and `TimerStatus` are the wire shape of the §5.2 STATE
+// frame, shared with the contestant overlay (`desktop/`). They live
+// in `@tca-timer/shared` (which already includes the optional
+// `connectedContestants` / `dbDegraded` SPA-side fields) so the two
+// consumers cannot drift in their understanding of the payload.
+import type { TimerState as SharedTimerState } from '@tca-timer/shared';
+export type { TimerState, TimerStatus } from '@tca-timer/shared';
 
 export interface HelpQueueEntry {
   contestantId: string;
@@ -30,15 +20,14 @@ export interface HelpQueue {
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
-export interface OffsetSample {
-  roundTrip: number;
-  offset: number;
-}
+// One PING/PONG sample for the §6.3 sliding-median offset tracker.
+// Re-exported from shared so the OffsetTracker storage type matches.
+export type { OffsetSample } from '@tca-timer/shared';
 
 /** §5.2 inbound frames. */
 export type ServerFrame =
   | { type: 'PONG'; t0: number; t1: number; t2: number }
-  | { type: 'STATE'; state: TimerState }
+  | { type: 'STATE'; state: SharedTimerState }
   | { type: 'HELP_QUEUE'; queue: HelpQueue }
   | { type: 'ERROR'; code: string; message: string };
 
