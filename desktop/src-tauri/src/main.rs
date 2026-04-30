@@ -8,11 +8,8 @@ mod preferences;
 use std::sync::Arc;
 
 use app_state::{AppState, Effects};
-use tca_timer_ipc_server::Handler;
 use config::{resolve, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
-use preferences::{
-    load_from_path, write_atomic, Corner, LoadAction, Preferences,
-};
+use preferences::{load_from_path, write_atomic, Corner, LoadAction, Preferences};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{
@@ -20,6 +17,7 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Listener, Manager, RunEvent, WindowEvent,
 };
+use tca_timer_ipc_server::Handler;
 
 const OVERLAY_LABEL: &str = "overlay";
 const EDGE_MARGIN: f64 = 24.0;
@@ -58,7 +56,10 @@ fn bootstrap() -> Bootstrap {
         (prefs_path.as_deref(), &outcome.action)
     {
         if let Err(err) = write_atomic(p, &outcome.preferences) {
-            eprintln!("tca-timer: failed to write preferences to {}: {err}", p.display());
+            eprintln!(
+                "tca-timer: failed to write preferences to {}: {err}",
+                p.display()
+            );
         }
     }
 
@@ -117,9 +118,7 @@ fn contestant_id() -> String {
 struct ManagedBootstrap(Mutex<Bootstrap>);
 
 #[tauri::command]
-fn get_bootstrap(
-    state: tauri::State<'_, ManagedBootstrap>,
-) -> BootstrapPayload {
+fn get_bootstrap(state: tauri::State<'_, ManagedBootstrap>) -> BootstrapPayload {
     let b = state.0.lock().expect("bootstrap mutex poisoned");
     BootstrapPayload {
         config: b.config.clone(),
@@ -225,10 +224,7 @@ fn build_tray(
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(
-        app,
-        &[&show, &hide, &position, &sep1, &prefs, &sep2, &quit],
-    )?;
+    let menu = Menu::with_items(app, &[&show, &hide, &position, &sep1, &prefs, &sep2, &quit])?;
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
@@ -378,14 +374,12 @@ fn main() {
             // so IPC /status reflects real wire state.
             let state_for_conn = state.clone();
             handle.listen("overlay:connection-changed", move |event| {
-                let connected: bool =
-                    serde_json::from_str(event.payload()).unwrap_or(false);
+                let connected: bool = serde_json::from_str(event.payload()).unwrap_or(false);
                 state_for_conn.set_connected(connected);
             });
             let state_for_pending = state.clone();
             handle.listen("overlay:help-pending-changed", move |event| {
-                let pending: bool =
-                    serde_json::from_str(event.payload()).unwrap_or(false);
+                let pending: bool = serde_json::from_str(event.payload()).unwrap_or(false);
                 state_for_pending.mark_help_pending(pending);
             });
 

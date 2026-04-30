@@ -30,10 +30,10 @@
 //! Both the server and the ctl helper compute the name with the same logic
 //! against the same environment, so they always agree.
 
-#[cfg(windows)]
-use interprocess::local_socket::{GenericNamespaced, ToNsName};
 #[cfg(not(windows))]
 use interprocess::local_socket::{GenericFilePath, ToFsName};
+#[cfg(windows)]
+use interprocess::local_socket::{GenericNamespaced, ToNsName};
 
 use serde::{Deserialize, Serialize};
 
@@ -350,10 +350,7 @@ mod tests {
         let c = compute_name_string(&env(None, Some("alice"), Some("")));
         assert_eq!(a, "/tmp/tca-timer-alice/tca-timer.sock");
         assert_ne!(a, b, "different users must get distinct paths");
-        assert_eq!(
-            c, a,
-            "empty XDG_RUNTIME_DIR must be treated as absent"
-        );
+        assert_eq!(c, a, "empty XDG_RUNTIME_DIR must be treated as absent");
     }
 
     #[cfg(not(windows))]

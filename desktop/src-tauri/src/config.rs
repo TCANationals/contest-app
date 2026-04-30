@@ -113,8 +113,7 @@ pub struct SourceValues {
 
 impl SourceValues {
     fn nonempty(raw: Option<String>) -> Option<String> {
-        raw.map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
+        raw.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
     }
 
     fn normalize(self) -> Self {
@@ -255,9 +254,11 @@ pub fn read_config_file(path: &std::path::Path) -> SourceEntry {
 pub fn default_config_file_path() -> PathBuf {
     #[cfg(windows)]
     {
-        let programdata = std::env::var("ProgramData")
-            .unwrap_or_else(|_| "C:/ProgramData".to_string());
-        PathBuf::from(programdata).join("TCATimer").join("config.json")
+        let programdata =
+            std::env::var("ProgramData").unwrap_or_else(|_| "C:/ProgramData".to_string());
+        PathBuf::from(programdata)
+            .join("TCATimer")
+            .join("config.json")
     }
     #[cfg(target_os = "macos")]
     {
@@ -608,9 +609,7 @@ mod tests {
         let p = default_config_file_path();
         assert_eq!(
             p,
-            std::path::PathBuf::from(
-                "/Library/Application Support/TCATimer/config.json"
-            ),
+            std::path::PathBuf::from("/Library/Application Support/TCATimer/config.json"),
         );
     }
 
@@ -625,10 +624,7 @@ mod tests {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     fn linux_default_config_path_is_etc_tca_timer() {
         let p = default_config_file_path();
-        assert_eq!(
-            p,
-            std::path::PathBuf::from("/etc/tca-timer/config.json"),
-        );
+        assert_eq!(p, std::path::PathBuf::from("/etc/tca-timer/config.json"),);
     }
 
     #[test]

@@ -380,10 +380,7 @@ mod tests {
     fn help_cancel_is_noop_when_nothing_pending() {
         let spy = Spy::new();
         let state = state_with(&spy);
-        assert!(matches!(
-            state.help_cancel(),
-            HelpCancelStatus::NotPending
-        ));
+        assert!(matches!(state.help_cancel(), HelpCancelStatus::NotPending));
         assert_eq!(spy.help_cancels.load(Ordering::SeqCst), 0);
     }
 

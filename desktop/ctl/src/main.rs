@@ -64,7 +64,12 @@ fn main() -> ExitCode {
 }
 
 fn parse_args(args: &[String]) -> Option<Request> {
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         ["help", "request"] => Some(Request::HelpRequest),
         ["help", "cancel"] => Some(Request::HelpCancel),
         ["timer", "show"] => Some(Request::TimerShow),
@@ -133,9 +138,7 @@ fn format_response(req: &Request, res: &Response) -> (&'static str, String) {
                 s.connected, s.visible, s.help_pending
             ),
         ),
-        (_, Response::Error { code, message }) => {
-            ("TCA Timer", format!("Error {code}: {message}"))
-        }
+        (_, Response::Error { code, message }) => ("TCA Timer", format!("Error {code}: {message}")),
     }
 }
 

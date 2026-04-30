@@ -137,9 +137,7 @@ fn parse_and_migrate(contents: &str) -> LoadOutcome {
     }
     let probe: Result<Probe, _> = serde_json::from_str(contents);
     match probe {
-        Ok(Probe {
-            version: Some(v),
-        }) if v > CURRENT_VERSION => LoadOutcome {
+        Ok(Probe { version: Some(v) }) if v > CURRENT_VERSION => LoadOutcome {
             preferences: Preferences::default(),
             action: LoadAction::FallbackNewer { saw: v },
         },
