@@ -99,6 +99,11 @@ export function CountdownWithBorder({
     .join(' ');
 
   // WebkitTextStroke is the widely-supported way to outline glyphs without a box border.
+  // The idle "--:--" glyphs are thin dashes; applying the same 2 px stroke as
+  // the running digits paints them as solid blobs. Skip the stroke in that
+  // state since readability isn't a concern on the neutral idle background.
+  const skipStroke = status === 'idle';
+
   return (
     <span
       className={classes}
@@ -108,7 +113,7 @@ export function CountdownWithBorder({
         // Paint-order keeps the fill readable atop the stroke.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         paintOrder: 'stroke fill' as any,
-        WebkitTextStroke: `${strokeWidthPx}px ${outline}`,
+        WebkitTextStroke: skipStroke ? 'none' : `${strokeWidthPx}px ${outline}`,
         ...style,
       }}
       aria-label={`Timer ${status}`}

@@ -37,6 +37,12 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
   const socketRef = useRef<WebSocket | null>(null);
   const trackerRef = useRef<OffsetTracker>(new OffsetTracker());
   const timersRef = useRef<{ reconnect?: number; pingIv?: number; warm?: number[] }>({});
+  // Keep the latest mintTicket callback in a ref so a new inline arrow from
+  // the caller does not reconnect the socket on every render.
+  const mintTicketRef = useRef(mintTicket);
+  useEffect(() => {
+    mintTicketRef.current = mintTicket;
+  }, [mintTicket]);
 
   useEffect(() => {
     setRoom(room);
@@ -92,12 +98,16 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       setConnection(attemptRef.current === 0 ? 'connecting' : 'reconnecting');
       let ticket: string;
       try {
-        ticket = await mintTicket();
+        ticket = await mintTicketRef.current();
       } catch (err) {
+        if (closedRef.current) return;
         setError({ code: 'TICKET_FAILED', message: (err as Error).message });
         scheduleReconnect();
         return;
       }
+      // A React StrictMode cleanup/re-mount may have flipped closedRef while
+      // we were awaiting the ticket. If so, do not create a stray socket.
+      if (closedRef.current) return;
 
       const base = wsBase ?? defaultWsBase();
       const url = `${base}/judge?room=${encodeURIComponent(room)}&ticket=${encodeURIComponent(ticket)}`;
@@ -200,7 +210,10 @@ export function useJudgeSocket(opts: UseJudgeSocketOptions): void {
       setSender(() => false);
       setConnection('idle');
     };
-  }, [room, disabled, mintTicket, wsBase, setConnection, setError, setHelpQueue, setOffset, setSender, setTimer]);
+    // Intentionally narrow deps: mintTicket is accessed via ref so callers
+    // can pass an inline arrow without tearing the socket down each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, disabled, wsBase]);
 }
 
 function defaultWsBase(): string {
