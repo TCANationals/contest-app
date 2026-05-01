@@ -1,0 +1,112 @@
+name: desktop-release
+
+# Build Tauri bundles for every supported OS and attach them to the
+# GitHub Release that triggered the workflow. We listen for `published`
+# (rather than `created`) so the workflow fires both when a release is
+# published directly and when a draft is flipped to public — `created`
+# also fires for drafts, which would force `releaseDraft: true` on the
+# upload step.
+on:
+  release:
+    types: [created]
+  # Manual escape hatch so we can re-run the bundle job against an
+  # existing release (e.g. after a transient runner failure) without
+  # cutting a brand-new tag.
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: 'GitHub Release id to attach artifacts to'
+        required: true
+      tag_name:
+        description: 'Tag name of the release (e.g. v0.1.0)'
+        required: true
+
+jobs:
+  bundle:
+    permissions:
+      # `tauri-action` needs write access to the Releases API to upload
+      # the built bundles as release assets.
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon — produces .app/.dmg for arm64.
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin'
+          # Intel macOS — produces .app/.dmg for x86_64. Kept as a
+          # separate matrix entry (rather than `--target universal-
+          # apple-darwin`) so the .sig / .app names in the Release stay
+          # arch-specific and match what the updater feed expects.
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            rust-targets: 'x86_64-apple-darwin'
+          # Pin to ubuntu-22.04 so the produced AppImage / .deb link
+          # against an older glibc and stay compatible with a wider
+          # range of distros than the rolling `ubuntu-latest` image.
+          - platform: ubuntu-22.04
+            args: ''
+            rust-targets: ''
+          - platform: windows-latest
+            args: ''
+            rust-targets: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      # Tauri 2 on Linux pulls in GTK/WebKit system libs; AppImage build
+      # additionally needs `patchelf` and `file`. macOS and Windows pick
+      # up their WebView deps from the OS itself.
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev patchelf file
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      # `desktop/` consumes `@tca-timer/shared` via a `file:../shared`
+      # link, so the shared package's own `node_modules` must be
+      # installed before the desktop install runs; otherwise npm's
+      # reify of the linked dep fails. Same constraint as the regular
+      # `desktop` CI workflow.
+      - name: Install shared package
+        working-directory: shared
+        run: npm ci || npm install
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci || npm install
+
+      - name: Build & publish Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          # When triggered by a `release` event, attach to the release
+          # GitHub already created for us. For `workflow_dispatch` we
+          # take the id from the manual inputs.
+          releaseId: ${{ github.event.release.id || inputs.release_id }}
+          # Setting `tagName` ensures the auto-generated `latest.json`
+          # updater feed points at the tagged release rather than
+          # `releases/latest/download/...`.
+          tagName: ${{ github.event.release.tag_name || inputs.tag_name }}
+          args: ${{ matrix.args }}
+          releaseDraft: true

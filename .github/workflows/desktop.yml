@@ -108,23 +108,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
-  tauri-bundle:
-    # TODO(§14.1): wire tauri-apps/tauri-action for MSI + .app/.dmg
-    # artifacts + Release attachment. Disabled until icons / signing
-    # settings / workflow secrets are configured.
-    if: false
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: desktop
-          args: '--verbose'
+  # Release bundling lives in `.github/workflows/desktop-release.yml`
+  # and runs on `release: published` for Linux, macOS (arm64 + x86_64),
+  # and Windows.
