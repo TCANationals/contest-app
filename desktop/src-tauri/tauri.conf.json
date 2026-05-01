@@ -49,7 +49,8 @@
     },
     "windows": {
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "installerHooks": "installer-hooks.nsh"
       }
     }
   },
