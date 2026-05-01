@@ -10,10 +10,13 @@
 //
 // Wire format: `<base64url(iv)>.<base64url(ciphertext+gcm-tag)>` where
 // the plaintext is `JSON.stringify(SessionPayload)`. AES-256-GCM with
-// the additional-authenticated-data set to the cookie name protects
-// against cross-cookie substitution. The encryption key is derived from
-// `SESSION_SECRET` via HKDF-SHA256 so the operator-supplied secret can
-// be any printable string of sufficient entropy (≥32 bytes).
+// a per-purpose additional-authenticated-data label protects against
+// cross-cookie substitution: a value sealed with one purpose
+// ("session") cannot be opened as another ("login-intent"), which
+// matters because both `routes/auth.ts` cookies share this envelope.
+// The encryption key is derived from `SESSION_SECRET` via HKDF-SHA256
+// so the operator-supplied secret can be any printable string of
+// sufficient entropy (≥32 bytes).
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -63,12 +66,32 @@ export function isSessionConfigured(): boolean {
   return getKey() !== null;
 }
 
-export function encodeSession(payload: SessionPayload): string {
+/**
+ * Domain-separation label baked into the GCM AAD. Each cookie that
+ * reuses `sealCookie`/`openCookie` MUST pass a distinct purpose so a
+ * value sealed under one purpose can't be opened under another. The
+ * session cookie hard-codes `'session'`; `routes/auth.ts` passes
+ * `'login-intent'` for its short-lived state cookie.
+ */
+export const SESSION_PURPOSE = 'session';
+
+function aadFor(purpose: string): Buffer {
+  // The literal prefix prevents collisions with any historical
+  // sealed-with-cookie-name values that might still be in flight
+  // (none in production, but cheap insurance).
+  return Buffer.from(`tca-timer:cookie:${purpose}`, 'utf8');
+}
+
+/**
+ * AES-256-GCM seal of a JSON-encodable payload. The `purpose` becomes
+ * the AAD, so opening with a different purpose throws.
+ */
+export function sealCookie(payload: unknown, purpose: string): string {
   const key = getKey();
   if (!key) throw new Error('session_secret_missing');
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
-  cipher.setAAD(Buffer.from(SESSION_COOKIE_NAME, 'utf8'));
+  cipher.setAAD(aadFor(purpose));
   const enc = Buffer.concat([
     cipher.update(Buffer.from(JSON.stringify(payload), 'utf8')),
     cipher.final(),
@@ -77,7 +100,11 @@ export function encodeSession(payload: SessionPayload): string {
   return `${iv.toString('base64url')}.${Buffer.concat([enc, tag]).toString('base64url')}`;
 }
 
-export function decodeSession(cookie: string, now = Date.now()): SessionPayload | null {
+/**
+ * AES-256-GCM open. Returns `null` on any failure (bad format, wrong
+ * key, wrong purpose / AAD mismatch, malformed JSON).
+ */
+export function openCookie(cookie: string, purpose: string): unknown {
   const key = getKey();
   if (!key) return null;
   const dot = cookie.indexOf('.');
@@ -96,18 +123,25 @@ export function decodeSession(cookie: string, now = Date.now()): SessionPayload 
   let plaintext: Buffer;
   try {
     const decipher = createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAAD(Buffer.from(SESSION_COOKIE_NAME, 'utf8'));
+    decipher.setAAD(aadFor(purpose));
     decipher.setAuthTag(tag);
     plaintext = Buffer.concat([decipher.update(enc), decipher.final()]);
   } catch {
     return null;
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(plaintext.toString('utf8'));
+    return JSON.parse(plaintext.toString('utf8'));
   } catch {
     return null;
   }
+}
+
+export function encodeSession(payload: SessionPayload): string {
+  return sealCookie(payload, SESSION_PURPOSE);
+}
+
+export function decodeSession(cookie: string, now = Date.now()): SessionPayload | null {
+  const parsed = openCookie(cookie, SESSION_PURPOSE);
   if (!isSessionPayload(parsed)) return null;
   if (parsed.exp < now) return null;
   return parsed;

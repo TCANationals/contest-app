@@ -79,17 +79,17 @@ The `seed-dev` service runs once on every `docker compose up` and
 upserts a single, well-known room so a fresh stack is immediately
 usable end-to-end without an admin-API round-trip:
 
-| Field             | Value             |
-| :---------------- | :---------------- |
-| Room id           | `dev`             |
-| Display label     | `Dev Room`        |
-| Room token        | `dev-room-token`  |
+| Field             | Value                      |
+| :---------------- | :------------------------- |
+| Room id           | `dev`                      |
+| Display label     | `Dev Room`                 |
+| Room key          | `dev-room-key-0123456789`  |
 
-The token is **not a secret** — it lives in
+The key is **not a secret** — it lives in
 [`server/src/db/seed-dev.ts`](./server/src/db/seed-dev.ts) and is
 hard-coded for the local-dev contract only. The seed script refuses
 to run when `NODE_ENV=production`. To re-run it against a running
-stack (e.g. after `docker compose down -v` rotated the bcrypt salt):
+stack (e.g. after `docker compose down -v` wiped the rooms table):
 
 ```bash
 docker compose run --rm seed-dev
@@ -97,8 +97,8 @@ docker compose run --rm seed-dev
 
 ### Running the desktop overlay against compose
 
-The Tauri overlay accepts `--room`, `--room-token`, and `--server`
-flags ([`desktop/src-tauri/src/config.rs`](./desktop/src-tauri/src/config.rs))
+The Tauri overlay accepts `--room-key` and `--server` flags
+([`desktop/src-tauri/src/config.rs`](./desktop/src-tauri/src/config.rs))
 and downgrades the WebSocket scheme to `ws://` for `localhost`,
 `127.0.0.1`, and `[::1]` (see
 [`desktop/src/url.ts`](./desktop/src/url.ts)). With the compose stack
@@ -109,7 +109,7 @@ against the seeded `dev` room is via the supported env vars
 ```bash
 cd desktop
 npm install   # first run only
-TCA_TIMER_ROOM=dev TCA_TIMER_ROOM_TOKEN=dev-room-token TCA_TIMER_SERVER=localhost:3000 npm run tauri dev
+TCA_TIMER_ROOM_KEY=dev-room-key-0123456789 TCA_TIMER_SERVER=localhost:3000 npm run tauri dev
 ```
 
 Once connected the overlay shows the timer state for the `dev` room.
@@ -122,6 +122,6 @@ broadcast to the overlay in real time.
 | Component | Lint | Test | Notes |
 | --------- | ---- | ---- | ----- |
 | shared    | `tsc --noEmit` | `vitest` | Pure-TS render-side timer math (§6.3 / §6.5 `computeRemainingMs`), digit formatter (§9.2.4 / §10.5 `formatCountdown` + `formatMs`), color/outline/pulse priority table (`countdownStyle`), and §6.3 `OffsetTracker`. Consumed by both desktop and spa. |
-| server    | `tsc --noEmit` | `node --test` | Fastify + `ws` backend with timer/help-queue state machines, full wire protocol, CF Access JWT + ticket cache, bcrypt room tokens, Twilio + SES adapters with quiet-hours/auto-cancel dispatcher, `pg` DAL + SQL migrations, audit-log retention, clock-drift sampler. |
+| server    | `tsc --noEmit` | `node --test` | Fastify + `ws` backend with timer/help-queue state machines, full wire protocol, CF Access JWT + ticket cache, plaintext room keys for contestant auth, Twilio + SES adapters with quiet-hours/auto-cancel dispatcher, `pg` DAL + SQL migrations, audit-log retention, clock-drift sampler. |
 | spa       | `tsc -b --noEmit` | `vitest` | React app w/ routing + pages, `@tca-timer/shared` for §6.3 timer math + §10.5 formatter + §9.2.4 color priority, PWA plugin, CountdownWithBorder. |
 | desktop   | `tsc -b --noEmit` + `cargo clippy` | `vitest` + `cargo test` | Vite+React overlay (`@tca-timer/shared` for §9.2.4 colors / §10.5 formatter / §6.3 timer math + offset tracker; §9.5 alarm/flash and preferences kept local), Tauri 2 shell with tray menu + single-instance + config resolution (§9.4, default host `timer.tcanationals.com`), OS-agnostic local-socket IPC (`ipc-proto` + `ipc-server` + `ctl`). |

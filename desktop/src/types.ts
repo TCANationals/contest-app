@@ -20,8 +20,7 @@ export interface Preferences {
 }
 
 export interface DesktopConfig {
-  room: string;
-  roomToken: string;
+  roomKey: string;
   serverHost: string;
 }
 

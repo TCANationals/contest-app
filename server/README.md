@@ -3,7 +3,7 @@
 Backend for the TCA Timer & Help-Call System described in
 [`../TCA_Timer_Design_Spec.docx.md`](../TCA_Timer_Design_Spec.docx.md) §11.
 
-**Runtime**: Node.js 22 · Fastify 4 · `ws` 8 · Postgres 15+ · jose · bcrypt · Twilio · AWS SES v2.
+**Runtime**: Node.js 22 · Fastify 4 · `ws` 8 · Postgres 15+ · jose · Twilio · AWS SES v2.
 
 ## Commands
 
@@ -22,7 +22,7 @@ npm run migrate   # run SQL files in src/db/migrations/ against $DATABASE_URL
 ### Wire protocol (§5)
 
 - `GET /judge?room=…&ticket=…` — WebSocket. Ticket-mint flow per §8.1: single-use, 30-second TTL, LRU-bounded.
-- `GET /contestant?room=…&id=…&token=…` — WebSocket. Room regex + lowercased-username regex + bcrypt token compare.
+- `GET /contestant?key=…&id=…` — WebSocket. Room-key regex + lowercased-username regex + direct `rooms.room_key` lookup. See "Contestant auth" below.
 - Frame handlers for every frame in §5.2 (`PING`/`PONG`, `STATE`, `HELP_QUEUE`, `ERROR`, all `TIMER_*`, `HELP_ACK`, `HELP_REQUEST`, `HELP_CANCEL`). `STATE` frames carry `connectedContestants` (for the SPA, §10.4) and `dbDegraded` (§11.5).
 - Upgrades rejected with `1008` (or HTTP 429 at the router) before handshake completes when room/ticket/token are wrong or when the per-source-IP or per-room connection cap is reached.
 
@@ -61,7 +61,7 @@ npm run migrate   # run SQL files in src/db/migrations/ against $DATABASE_URL
 Implemented in `src/routes/`:
 
 - `POST /api/judge/ticket`, `GET /api/judge/rooms`, `GET /api/judge/log`, `GET /api/judge/log.csv`, `GET /api/judge/prefs`, `PUT /api/judge/prefs`, `POST /api/judge/prefs/verify-phone`, `POST /api/judge/prefs/verify-email`.
-- `POST /api/admin/rooms`, `POST /api/admin/rooms/:id/rotate-token` — gated on the `judges-admin` group; returns the freshly-generated room token once.
+- `POST /api/admin/rooms`, `POST /api/admin/rooms/:id/rotate-key` — gated on the `judges-admin` group; returns the freshly-generated `room_key`. Because the key is stored plaintext (§8.2), admins can also read it back from the `rooms` table without rotating.
 - `POST /api/webhooks/twilio` (HMAC validation), `POST /api/webhooks/ses` (SNS signature validation; auto-confirms `SubscriptionConfirmation`; routes bounces/complaints to `email_status='opted_out'`).
 - `GET /healthz` reports DB state and room count.
 
@@ -76,7 +76,7 @@ Implemented in `src/routes/`:
   config. Group membership comes from `OIDC_GROUPS_CLAIM` (default
   `groups`) plus `OIDC_ADMIN_EMAILS` allowlist; `judgeRoomAccess` then
   maps `judges-admin` / `judges-<roomId>` to authorized rooms.
-- Contestant: bcrypt(12) hashed room tokens; constant-time compare.
+- Contestant: plaintext room keys stored directly in `rooms.room_key` and matched via a unique-index lookup on the `/contestant?key=…` upgrade. The only capability a leaked key grants is "connect an overlay and possibly trigger an extra help page", which isn't worth the overhead of a public-id + private-token pair.
 
 ### Background jobs
 
@@ -92,7 +92,7 @@ src/
     identity.ts               JudgeIdentity + group/role mapping + ticket LRU (§8.1)
     oidc.ts                   OIDC client (discovery, code-flow, claim → identity)
     session.ts                Encrypted session cookie (AES-256-GCM)
-    room-token.ts             bcrypt hash + regexes (§8.2)
+    identifiers.ts            room / contestant / room-key regexes (§3.1, §4.1, §8.2)
   clock.ts                    clock-drift sampler (§11.6)
   db/
     dal.ts                    Postgres DAL + retry ring buffer (§11.5)

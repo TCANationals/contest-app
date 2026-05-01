@@ -79,11 +79,11 @@ services:
     restart: "no"
 
   # One-shot service: idempotently inserts a single well-known room
-  # (`id=dev`, `roomToken=dev-room-token`) so the desktop overlay can
-  # connect immediately on a fresh `docker compose up` without manual
-  # admin-API setup. The script hard-refuses to run when
-  # `NODE_ENV=production`. See `server/src/db/seed-dev.ts` for the
-  # full plain-text contract — it is intentionally non-secret and
+  # (`id=dev`, `roomKey=dev-room-key-0123456789`) so the desktop
+  # overlay can connect immediately on a fresh `docker compose up`
+  # without manual admin-API setup. The script hard-refuses to run
+  # when `NODE_ENV=production`. See `server/src/db/seed-dev.ts` for
+  # the full plain-text contract — it is intentionally non-secret and
   # documented in the repo `README.md`.
   seed-dev:
     build:

@@ -11,17 +11,15 @@
 // `ws://localhost:*` and `ws://127.0.0.1:*` for exactly this reason.
 
 export interface ContestantUrlInputs {
-  room: string;
+  roomKey: string;
   contestantId: string;
-  roomToken: string;
   serverHost: string;
 }
 
 export function buildContestantUrl(inputs: ContestantUrlInputs): string {
   const q = new URLSearchParams({
-    room: inputs.room,
+    key: inputs.roomKey,
     id: inputs.contestantId,
-    token: inputs.roomToken,
   });
   const scheme = isLocalDevHost(inputs.serverHost) ? 'ws' : 'wss';
   return `${scheme}://${inputs.serverHost}/contestant?${q.toString()}`;

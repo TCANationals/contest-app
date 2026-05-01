@@ -5,9 +5,8 @@ import type { WebSocket } from 'ws';
 
 import {
   CONTESTANT_ID_REGEX,
-  ROOM_ID_REGEX,
-  verifyRoomTokenHash,
-} from '../auth/room-token.js';
+  ROOM_KEY_REGEX,
+} from '../auth/identifiers.js';
 import {
   getOrCreateRoomState,
   broadcastHelpQueueToJudges,
@@ -19,7 +18,7 @@ import {
   scheduleHeadNotification,
   type RoomState,
 } from '../rooms.js';
-import { getRoom, getStationNumber } from '../db/dal.js';
+import { getRoomByKey, getStationNumber } from '../db/dal.js';
 import { helpRequest, helpCancel } from '../help-queue.js';
 import {
   RateLimiter,
@@ -42,22 +41,18 @@ export function registerContestantWs(app: FastifyInstance): void {
     '/contestant',
     { websocket: true },
     async (socket: WebSocket, req: FastifyRequest) => {
-      const query = req.query as { room?: string; id?: string; token?: string };
-      const roomId = query.room ?? '';
+      const query = req.query as { key?: string; id?: string };
+      const roomKey = query.key ?? '';
       const rawId = query.id ?? '';
       const contestantId = rawId.toLowerCase();
-      const token = query.token ?? '';
 
-      if (!ROOM_ID_REGEX.test(roomId)) return closeWith(socket, 1008, 'bad_room');
+      if (!ROOM_KEY_REGEX.test(roomKey)) return closeWith(socket, 1008, 'bad_key');
       if (!CONTESTANT_ID_REGEX.test(contestantId)) return closeWith(socket, 1008, 'bad_contestant');
 
-      const roomRow = await getRoom(roomId).catch(() => null);
+      const roomRow = await getRoomByKey(roomKey).catch(() => null);
       if (!roomRow || roomRow.archived_at) return closeWith(socket, 1008, 'unknown_room');
 
-      const tokenOk = await verifyRoomTokenHash(token, roomRow.token_hash).catch(() => false);
-      if (!tokenOk) return closeWith(socket, 1008, 'bad_token');
-
-      const room = getOrCreateRoomState(roomId, roomRow.display_label);
+      const room = getOrCreateRoomState(roomRow.id, roomRow.display_label);
       if (room.judges.size + room.contestants.size >= ROOM_CONNECTION_CAP) {
         return closeWith(socket, 1008, 'room_full');
       }

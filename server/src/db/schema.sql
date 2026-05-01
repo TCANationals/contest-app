@@ -1,11 +1,16 @@
 -- TCA Timer Postgres schema (§11.3). Authoritative DDL.
 
--- Rooms registry. The token is never stored in plaintext.
+-- Rooms registry. `room_key` is a plaintext high-entropy random string
+-- that identifies *and* authenticates a room for the contestant overlay
+-- (§8.2). It replaces the previous public-id + bcrypt-token pair: the
+-- only thing gated by the key is "connect as a contestant in this
+-- room", a leak is low consequence (extra help page at worst), and
+-- admins need to be able to retrieve the key after initial creation.
 CREATE TABLE rooms (
   id            TEXT PRIMARY KEY
                 CHECK (id ~ '^[a-z0-9][a-z0-9-]{1,62}$'),
   display_label TEXT NOT NULL,
-  token_hash    TEXT NOT NULL,                  -- bcrypt hash, cost 12
+  room_key      TEXT NOT NULL UNIQUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   archived_at   TIMESTAMPTZ
 );

@@ -31,54 +31,55 @@ import {
 import {
   SESSION_COOKIE_NAME,
   clearSessionCookie,
-  encodeSession,
-  decodeSession,
   identityFromRequest,
   isRequestSecure,
   isSessionConfigured,
   newSessionPayload,
+  openCookie,
+  sealCookie,
   setSessionCookie,
-  type SessionPayload,
 } from '../auth/session.js';
 
 const LOGIN_INTENT_COOKIE = 'tca_login';
 const LOGIN_INTENT_TTL_MS = 10 * 60 * 1000; // 10 minutes — IdP round-trip
+//
+// Distinct AAD label for the login-intent cookie: keeps it sealed with
+// the same key as the session cookie but in a separate cryptographic
+// "domain", so a `tca_login` value lifted into the `tca_sess` slot
+// fails decryption. Without this, an attacker could mint a free
+// authenticated identity by visiting /api/auth/login and copying
+// the intent cookie into the session slot.
+const LOGIN_INTENT_PURPOSE = 'login-intent';
 
-interface IntentPayload extends OidcLoginIntent {
-  // Same self-contained encrypted-cookie format as the session cookie,
-  // so we can reuse `encodeSession`/`decodeSession` by piggy-backing on
-  // its envelope. The intent payload masquerades as a SessionPayload
-  // by using `sub`/`email`/`groups` slots; see `intentToPayload`.
+interface SealedIntent {
+  state: string;
+  nonce: string;
+  codeVerifier: string;
+  returnTo: string;
+  exp: number; // ms since epoch
 }
 
-function intentToPayload(intent: OidcLoginIntent, now: number): SessionPayload {
-  // Pack the intent fields into the SessionPayload shape so we get
-  // confidentiality, integrity, and expiry checks for free. Each slot
-  // re-purposed:
-  //   sub    → state
-  //   email  → nonce
-  //   groups → [codeVerifier, returnTo]
-  return {
-    sub: intent.state,
-    email: intent.nonce,
-    groups: [intent.codeVerifier, intent.returnTo],
-    iat: now,
-    exp: now + LOGIN_INTENT_TTL_MS,
-  };
-}
-
-function payloadToIntent(p: SessionPayload): OidcLoginIntent | null {
-  if (!p.sub || !p.email || p.groups.length !== 2) return null;
-  return {
-    state: p.sub,
-    nonce: p.email,
-    codeVerifier: p.groups[0]!,
-    returnTo: p.groups[1]!,
-  };
+function isSealedIntent(v: unknown): v is SealedIntent {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  return (
+    typeof r.state === 'string' &&
+    typeof r.nonce === 'string' &&
+    typeof r.codeVerifier === 'string' &&
+    typeof r.returnTo === 'string' &&
+    typeof r.exp === 'number'
+  );
 }
 
 function setIntentCookie(reply: FastifyReply, intent: OidcLoginIntent, secure: boolean): void {
-  const value = encodeSession(intentToPayload(intent, Date.now()));
+  const sealed: SealedIntent = {
+    state: intent.state,
+    nonce: intent.nonce,
+    codeVerifier: intent.codeVerifier,
+    returnTo: intent.returnTo,
+    exp: Date.now() + LOGIN_INTENT_TTL_MS,
+  };
+  const value = sealCookie(sealed, LOGIN_INTENT_PURPOSE);
   const attrs = [
     `${LOGIN_INTENT_COOKIE}=${value}`,
     'Path=/api/auth',
@@ -94,9 +95,15 @@ function readIntentCookie(req: FastifyRequest): OidcLoginIntent | null {
   const cookies = (req as FastifyRequest & { cookies?: Record<string, string> }).cookies;
   const raw = cookies?.[LOGIN_INTENT_COOKIE];
   if (!raw) return null;
-  const payload = decodeSession(raw);
-  if (!payload) return null;
-  return payloadToIntent(payload);
+  const sealed = openCookie(raw, LOGIN_INTENT_PURPOSE);
+  if (!isSealedIntent(sealed)) return null;
+  if (sealed.exp < Date.now()) return null;
+  return {
+    state: sealed.state,
+    nonce: sealed.nonce,
+    codeVerifier: sealed.codeVerifier,
+    returnTo: sealed.returnTo,
+  };
 }
 
 function clearIntentCookie(reply: FastifyReply, secure: boolean): void {

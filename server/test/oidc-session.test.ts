@@ -7,6 +7,9 @@ import {
   isSessionConfigured,
   maybeRenewSession,
   newSessionPayload,
+  openCookie,
+  sealCookie,
+  SESSION_PURPOSE,
   SESSION_TTL_MS,
 } from '../src/auth/session.js';
 import { identityFromClaims, loadOidcConfig } from '../src/auth/oidc.js';
@@ -68,6 +71,40 @@ describe('session cookie (encrypted)', () => {
     const stale = maybeRenewSession(fresh, now + 2 * 60 * 60 * 1000);
     assert.ok(stale);
     assert.ok(stale.exp > fresh.exp);
+  });
+
+  it('domain-separates cookie purposes (cross-purpose substitution fails)', () => {
+    // Regression for the login-intent-as-session bypass: a value
+    // sealed under the `'login-intent'` purpose must NOT decrypt as
+    // a session cookie even though both share the same key. Without
+    // the per-purpose AAD, an unauthenticated visitor could mint a
+    // valid `tca_login` via /api/auth/login and copy it into the
+    // `tca_sess` slot for a free authenticated identity.
+    const intentSealed = sealCookie(
+      {
+        state: 'attacker-state',
+        nonce: 'attacker-nonce',
+        codeVerifier: 'attacker-cv',
+        returnTo: '/',
+        // SessionPayload-shaped poison so the ambient validator would
+        // happily accept it if the AAD weren't checked.
+        sub: 'attacker',
+        email: 'attacker@evil.test',
+        groups: ['judges-admin'],
+        iat: Date.now(),
+        exp: Date.now() + 10 * 60_000,
+      },
+      'login-intent',
+    );
+    assert.equal(decodeSession(intentSealed), null);
+    assert.equal(openCookie(intentSealed, SESSION_PURPOSE), null);
+
+    // And the inverse: a sealed session payload must not open as a
+    // login-intent cookie either.
+    const sessSealed = encodeSession(
+      newSessionPayload({ sub: 's', email: 's@x', groups: [] }),
+    );
+    assert.equal(openCookie(sessSealed, 'login-intent'), null);
   });
 });
 

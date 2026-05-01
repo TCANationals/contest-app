@@ -85,23 +85,20 @@ async function close(sock: FramedSocket): Promise<void> {
 describe('HELP_QUEUE version bumps on station-number backfill', () => {
   let app: App;
   let baseUrl: string;
-  let token: string;
+  let roomKey: string;
 
   before(async () => {
-    const bcrypt = (await import('bcrypt')).default;
-    token = 'station-test-token';
-    const hash = await bcrypt.hash(token, 4);
+    roomKey = 'station-test-room-key-0123456789';
 
-    __testOverrides.getRoom = async (id) => {
-      if (id !== 'nationals-2026') return null;
-      return {
-        id,
-        display_label: 'Nationals 2026',
-        token_hash: hash,
-        created_at: new Date(),
-        archived_at: null,
-      };
+    const room = {
+      id: 'nationals-2026',
+      display_label: 'Nationals 2026',
+      room_key: roomKey,
+      created_at: new Date(),
+      archived_at: null,
     };
+    __testOverrides.getRoom = async (id) => (id === room.id ? room : null);
+    __testOverrides.getRoomByKey = async (k) => (k === roomKey ? room : null);
     __testOverrides.upsertTimerState = async () => {};
     __testOverrides.insertAuditEvent = async () => {};
     __testOverrides.loadTimerState = async () => null;
@@ -139,7 +136,7 @@ describe('HELP_QUEUE version bumps on station-number backfill', () => {
     await waitForFrame(judge, (f) => f.type === 'HELP_QUEUE');
 
     const contestant = await open(
-      `${baseUrl}/contestant?room=nationals-2026&id=alice&token=${token}`,
+      `${baseUrl}/contestant?key=${roomKey}&id=alice`,
     );
     // Wait for the contestant's initial STATE frame — that guarantees the
     // server's async route handler has finished attaching the `message`

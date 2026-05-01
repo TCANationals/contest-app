@@ -31,7 +31,7 @@ import {
   insertAuditEvent,
   type JudgePrefsRow,
 } from '../db/dal.js';
-import { ROOM_ID_REGEX } from '../auth/room-token.js';
+import { ROOM_ID_REGEX } from '../auth/identifiers.js';
 import { isE164 } from '../notify/twilio.js';
 import { isEmailAddress } from '../notify/ses.js';
 

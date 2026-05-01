@@ -5,13 +5,12 @@ import { buildContestantUrl, isLocalDevHost } from '../src/url';
 describe('buildContestantUrl', () => {
   it('uses wss:// for production FQDNs', () => {
     const url = buildContestantUrl({
-      room: 'nationals-2026',
+      roomKey: 'super-secret-room-key-abc',
       contestantId: 'alice',
-      roomToken: 'super-secret',
       serverHost: 'timer.tcanationals.com',
     });
     expect(url).toBe(
-      'wss://timer.tcanationals.com/contestant?room=nationals-2026&id=alice&token=super-secret',
+      'wss://timer.tcanationals.com/contestant?key=super-secret-room-key-abc&id=alice',
     );
   });
 
@@ -21,30 +20,27 @@ describe('buildContestantUrl', () => {
     // downgrade is what makes `--server localhost:3000` work for the
     // overlay's docker-compose dev workflow.
     const url = buildContestantUrl({
-      room: 'dev',
+      roomKey: 'dev-room-key-0123456789',
       contestantId: 'mike',
-      roomToken: 'dev-room-token',
       serverHost: 'localhost:3000',
     });
     expect(url).toBe(
-      'ws://localhost:3000/contestant?room=dev&id=mike&token=dev-room-token',
+      'ws://localhost:3000/contestant?key=dev-room-key-0123456789&id=mike',
     );
   });
 
   it('downgrades to ws:// for 127.0.0.1 and IPv6 loopback', () => {
     expect(
       buildContestantUrl({
-        room: 'r',
+        roomKey: 'k-0123456789abcdef',
         contestantId: 'i',
-        roomToken: 't',
         serverHost: '127.0.0.1:3000',
       }),
     ).toMatch(/^ws:\/\//);
     expect(
       buildContestantUrl({
-        room: 'r',
+        roomKey: 'k-0123456789abcdef',
         contestantId: 'i',
-        roomToken: 't',
         serverHost: '[::1]:3000',
       }),
     ).toMatch(/^ws:\/\//);
@@ -52,14 +48,13 @@ describe('buildContestantUrl', () => {
 
   it('URL-encodes special characters in query params', () => {
     const url = buildContestantUrl({
-      room: 'r',
+      roomKey: 'a b/c',
       contestantId: 'user@host',
-      roomToken: 'a b/c',
       serverHost: 'timer.tcanationals.com',
     });
     expect(url).toContain('id=user%40host');
     // URLSearchParams encodes spaces as `+` and slashes as `%2F`.
-    expect(url).toMatch(/token=a\+b%2Fc/);
+    expect(url).toMatch(/key=a\+b%2Fc/);
   });
 });
 

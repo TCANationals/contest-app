@@ -5,10 +5,10 @@ import { randomBytes } from 'node:crypto';
 
 import { type JudgeIdentity } from '../auth/identity.js';
 import { identityFromRequest } from '../auth/session.js';
-import { hashRoomToken, ROOM_ID_REGEX } from '../auth/room-token.js';
+import { ROOM_ID_REGEX } from '../auth/identifiers.js';
 import {
   insertRoom,
-  updateRoomTokenHash,
+  updateRoomKey,
   getRoom,
   insertAuditEvent,
 } from '../db/dal.js';
@@ -33,7 +33,14 @@ async function requireAdmin(
   return req.judgeIdentity;
 }
 
-function newRoomToken(): string {
+/**
+ * Freshly-minted room key (§8.2). 32 random bytes → 43 URL-safe chars,
+ * well inside the `ROOM_KEY_REGEX` bounds enforced at the contestant
+ * upgrade. Stored plaintext: the only thing the key gates is "connect
+ * a contestant overlay here", a leak is low-consequence, and admins
+ * need to be able to retrieve it after creation.
+ */
+function newRoomKey(): string {
   return randomBytes(32).toString('base64url');
 }
 
@@ -52,10 +59,9 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     if (existing) {
       return reply.code(409).send({ error: 'room_exists' });
     }
-    const token = newRoomToken();
-    const tokenHash = await hashRoomToken(token);
+    const roomKey = newRoomKey();
     try {
-      await insertRoom(body.id, body.display_label, tokenHash);
+      await insertRoom(body.id, body.display_label, roomKey);
     } catch (err) {
       return reply.code(500).send({ error: 'db_error', detail: (err as Error).message });
     }
@@ -72,10 +78,10 @@ export function registerAdminRoutes(app: FastifyInstance): void {
       /* degraded ring handles */
     }
     reply.code(201);
-    return { id: body.id, display_label: body.display_label, token };
+    return { id: body.id, display_label: body.display_label, room_key: roomKey };
   });
 
-  app.post('/api/admin/rooms/:id/rotate-token', async (req, reply) => {
+  app.post('/api/admin/rooms/:id/rotate-key', async (req, reply) => {
     const id = await requireAdmin(req, reply);
     if (!id) return;
     const params = req.params as { id: string };
@@ -84,10 +90,9 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     }
     const existing = await getRoom(params.id);
     if (!existing) return reply.code(404).send({ error: 'unknown_room' });
-    const token = newRoomToken();
-    const tokenHash = await hashRoomToken(token);
+    const roomKey = newRoomKey();
     try {
-      await updateRoomTokenHash(params.id, tokenHash);
+      await updateRoomKey(params.id, roomKey);
     } catch (err) {
       return reply.code(500).send({ error: 'db_error', detail: (err as Error).message });
     }
@@ -97,10 +102,10 @@ export function registerAdminRoutes(app: FastifyInstance): void {
         atServerMs: Date.now(),
         actorSub: id.sub,
         actorEmail: id.email,
-        eventType: 'ROOM_TOKEN_ROTATED',
+        eventType: 'ROOM_KEY_ROTATED',
         payload: {},
       });
     } catch {}
-    return { id: params.id, token };
+    return { id: params.id, room_key: roomKey };
   });
 }

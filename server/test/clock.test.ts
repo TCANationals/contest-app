@@ -131,14 +131,14 @@ describe('logClockDriftWarning (§11.6)', () => {
       {
         id: 'room-a',
         display_label: 'A',
-        token_hash: 'x',
+        room_key: 'room-a-key-0123456789',
         created_at: new Date(),
         archived_at: null,
       },
       {
         id: 'room-b',
         display_label: 'B',
-        token_hash: 'x',
+        room_key: 'room-b-key-0123456789',
         created_at: new Date(),
         archived_at: null,
       },

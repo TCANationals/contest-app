@@ -12,32 +12,43 @@ import type { TimerState } from '../timer.js';
 export interface RoomRow {
   id: string;
   display_label: string;
-  token_hash: string;
+  room_key: string;
   created_at: Date;
   archived_at: Date | null;
 }
 
-async function _insertRoom(id: string, displayLabel: string, tokenHash: string): Promise<void> {
+async function _insertRoom(id: string, displayLabel: string, roomKey: string): Promise<void> {
   const pool = getPool();
   await pool.query(
-    `INSERT INTO rooms (id, display_label, token_hash)
+    `INSERT INTO rooms (id, display_label, room_key)
      VALUES ($1, $2, $3)`,
-    [id, displayLabel, tokenHash],
+    [id, displayLabel, roomKey],
   );
 }
 
-async function _updateRoomTokenHash(id: string, tokenHash: string): Promise<void> {
+async function _updateRoomKey(id: string, roomKey: string): Promise<void> {
   const pool = getPool();
-  await pool.query(`UPDATE rooms SET token_hash = $2 WHERE id = $1`, [id, tokenHash]);
+  await pool.query(`UPDATE rooms SET room_key = $2 WHERE id = $1`, [id, roomKey]);
 }
 
 async function _getRoom(id: string): Promise<RoomRow | null> {
   if (!hasDatabase()) return null;
   const pool = getPool();
   const res = await pool.query<RoomRow>(
-    `SELECT id, display_label, token_hash, created_at, archived_at
+    `SELECT id, display_label, room_key, created_at, archived_at
        FROM rooms WHERE id = $1`,
     [id],
+  );
+  return res.rows[0] ?? null;
+}
+
+async function _getRoomByKey(roomKey: string): Promise<RoomRow | null> {
+  if (!hasDatabase()) return null;
+  const pool = getPool();
+  const res = await pool.query<RoomRow>(
+    `SELECT id, display_label, room_key, created_at, archived_at
+       FROM rooms WHERE room_key = $1`,
+    [roomKey],
   );
   return res.rows[0] ?? null;
 }
@@ -46,7 +57,7 @@ async function _listActiveRooms(): Promise<RoomRow[]> {
   if (!hasDatabase()) return [];
   const pool = getPool();
   const res = await pool.query<RoomRow>(
-    `SELECT id, display_label, token_hash, created_at, archived_at
+    `SELECT id, display_label, room_key, created_at, archived_at
        FROM rooms
        WHERE archived_at IS NULL
        ORDER BY id ASC`,
@@ -405,6 +416,7 @@ async function _pruneAuditLog(olderThanMs: number): Promise<number> {
 
 export interface DalOverrides {
   getRoom?: (id: string) => Promise<RoomRow | null>;
+  getRoomByKey?: (roomKey: string) => Promise<RoomRow | null>;
   listActiveRooms?: () => Promise<RoomRow[]>;
   getStationNumber?: (room: string, contestantId: string) => Promise<number | null>;
   loadTimerState?: (room: string) => Promise<TimerState | null>;
@@ -419,8 +431,8 @@ export interface DalOverrides {
   setPhoneStatus?: (sub: string, status: JudgePrefsRow['phone_status']) => Promise<void>;
   setEmailStatus?: (sub: string, status: JudgePrefsRow['email_status']) => Promise<void>;
   upsertJudgePrefs?: (row: JudgePrefsPatch) => Promise<void>;
-  insertRoom?: (id: string, displayLabel: string, tokenHash: string) => Promise<void>;
-  updateRoomTokenHash?: (id: string, tokenHash: string) => Promise<void>;
+  insertRoom?: (id: string, displayLabel: string, roomKey: string) => Promise<void>;
+  updateRoomKey?: (id: string, roomKey: string) => Promise<void>;
 }
 
 export const __testOverrides: DalOverrides = {};
@@ -429,11 +441,11 @@ export const __testOverrides: DalOverrides = {};
 // Public exports route through the override hook.
 // ---------------------------------------------------------------------------
 
-export function insertRoom(id: string, displayLabel: string, tokenHash: string): Promise<void> {
-  return (__testOverrides.insertRoom ?? _insertRoom)(id, displayLabel, tokenHash);
+export function insertRoom(id: string, displayLabel: string, roomKey: string): Promise<void> {
+  return (__testOverrides.insertRoom ?? _insertRoom)(id, displayLabel, roomKey);
 }
-export function updateRoomTokenHash(id: string, tokenHash: string): Promise<void> {
-  return (__testOverrides.updateRoomTokenHash ?? _updateRoomTokenHash)(id, tokenHash);
+export function updateRoomKey(id: string, roomKey: string): Promise<void> {
+  return (__testOverrides.updateRoomKey ?? _updateRoomKey)(id, roomKey);
 }
 export function upsertJudgePrefs(row: JudgePrefsPatch): Promise<void> {
   return (__testOverrides.upsertJudgePrefs ?? _upsertJudgePrefs)(row);
@@ -447,6 +459,9 @@ export function setEmailStatus(sub: string, status: JudgePrefsRow['email_status'
 
 export function getRoom(id: string): Promise<RoomRow | null> {
   return (__testOverrides.getRoom ?? _getRoom)(id);
+}
+export function getRoomByKey(roomKey: string): Promise<RoomRow | null> {
+  return (__testOverrides.getRoomByKey ?? _getRoomByKey)(roomKey);
 }
 export function listActiveRooms(): Promise<RoomRow[]> {
   return (__testOverrides.listActiveRooms ?? _listActiveRooms)();
