@@ -8,7 +8,7 @@ name: desktop-release
 # upload step.
 on:
   release:
-    types: [created]
+    types: [published]
   # Manual escape hatch so we can re-run the bundle job against an
   # existing release (e.g. after a transient runner failure) without
   # cutting a brand-new tag.
