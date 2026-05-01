@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3A3A3A"/>
+      <stop offset="0.55" stop-color="#202020"/>
+      <stop offset="1" stop-color="#0E0E0E"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx="0.5" cy="0.45" r="0.65">
+      <stop offset="0.6" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.35"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#vignette)"/>
+
+  <g transform="translate(176, 176) scale(28)"
+     fill="none" stroke="#F5F5F5" stroke-width="1.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 13a7 7 0 1 0 14 0a7 7 0 0 0 -14 0"/>
+    <path d="M14.5 10.5l-2.5 2.5"/>
+    <path d="M17 8l1 -1"/>
+    <path d="M14 3h-4"/>
+  </g>
+</svg>

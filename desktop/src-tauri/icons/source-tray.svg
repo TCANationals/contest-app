@@ -1,0 +1,19 @@
+<!--
+  Tight viewBox = path bounds + half stroke (0.925) on every side, so the
+  glyph fills the rendered square edge-to-edge along the taller axis.
+  The horizontal letterboxing (~8% per side) is the icon's native aspect
+  ratio (the stopwatch stem makes it taller than wide); tightening
+  further would distort the glyph. The OS adds its own padding around
+  the tray bitmap, so we don't add any here.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="4.075 2.075 15.85 18.85"
+     width="1024" height="1024">
+  <g fill="none" stroke="#FFFFFF" stroke-width="1.85"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 13a7 7 0 1 0 14 0a7 7 0 0 0 -14 0"/>
+    <path d="M14.5 10.5l-2.5 2.5"/>
+    <path d="M17 8l1 -1"/>
+    <path d="M14 3h-4"/>
+  </g>
+</svg>

@@ -252,7 +252,15 @@ fn build_tray(
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
     let state_for_tray = state.clone();
+    // Glyph-only stopwatch (transparent background) so the tray reads
+    // cleanly on every platform: macOS uses `icon_as_template(true)` to
+    // tint based on light/dark menu-bar appearance, and Windows/Linux
+    // taskbar trays render the white-on-alpha bitmap directly. The
+    // gradient-backed launcher icon (`icon.png`) would look wrong shrunk
+    // to ~22px in a system tray.
     let _tray = TrayIconBuilder::with_id("main")
+        .icon(tauri::include_image!("icons/tray.png"))
+        .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("TCA Timer")

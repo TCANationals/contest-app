@@ -97,3 +97,49 @@ describe('REST endpoints without auth', () => {
     assert.ok([401, 503].includes(res.statusCode));
   });
 });
+
+describe('OIDC callback preconditions', () => {
+  // This block deliberately stands up its own server so it can twiddle
+  // SESSION_SECRET without poisoning the suite above (which leaves the
+  // secret set globally).
+  let app: Awaited<ReturnType<typeof buildServer>>;
+  let priorEnv: Record<string, string | undefined>;
+
+  before(async () => {
+    priorEnv = {
+      OIDC_ISSUER: process.env.OIDC_ISSUER,
+      OIDC_CLIENT_ID: process.env.OIDC_CLIENT_ID,
+      OIDC_REDIRECT_URI: process.env.OIDC_REDIRECT_URI,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+    };
+    // OIDC configured...
+    process.env.OIDC_ISSUER = 'https://issuer.test';
+    process.env.OIDC_CLIENT_ID = 'cid';
+    process.env.OIDC_REDIRECT_URI = 'https://app.test/api/auth/callback';
+    // ...but SESSION_SECRET *unset*. This is the misconfiguration the
+    // regression covers: the user can complete IdP login, hit the
+    // callback, and we have no key to seal the session cookie with.
+    delete process.env.SESSION_SECRET;
+    app = await buildServer();
+  });
+
+  after(async () => {
+    await app.close();
+    for (const [k, v] of Object.entries(priorEnv)) {
+      if (v == null) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('GET /api/auth/callback returns 503 (not 500) when SESSION_SECRET is missing', async () => {
+    // Without the precondition, this request would proceed to
+    // `setSessionCookie → sealCookie → getKey() → throw`, and Fastify
+    // would reply with a generic 500 *after* the user has already
+    // authenticated at the IdP. With the guard in place we fail fast
+    // with a precise 503 before ever calling the IdP.
+    const res = await app.inject({ method: 'GET', url: '/api/auth/callback?code=anything&state=anything' });
+    assert.equal(res.statusCode, 503);
+    const body = res.json() as { error: string };
+    assert.equal(body.error, 'session_secret_missing');
+  });
+});

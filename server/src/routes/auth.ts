@@ -179,6 +179,18 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     }
     const cfg = loadOidcConfig();
     if (!cfg) return reply.code(503).send({ error: 'oidc_not_configured' });
+    // Mirror the same precondition `/api/auth/login` checks. Without
+    // this, a SESSION_SECRET that was unset (or shrunk below 32 bytes)
+    // *between* the login and the callback would let the user
+    // authenticate at the IdP successfully and then crash inside
+    // `setSessionCookie → sealCookie → getKey()` with an opaque 500.
+    // Returning 503 up front gives the operator a precise, actionable
+    // log line and the user a recoverable state — they can retry once
+    // the secret is provisioned, instead of being stuck with a half-
+    // completed login.
+    if (!isSessionConfigured()) {
+      return reply.code(503).send({ error: 'session_secret_missing' });
+    }
 
     const intent = readIntentCookie(req);
     if (!intent) {
