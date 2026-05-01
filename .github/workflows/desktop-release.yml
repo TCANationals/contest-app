@@ -31,17 +31,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Apple Silicon — produces .app/.dmg for arm64.
+          # Single macOS bundle covering both Apple Silicon and Intel.
+          # `--target universal-apple-darwin` makes Tauri build the app
+          # twice (once per arch) and `lipo` the binaries into a fat
+          # `.app`/`.dmg`, so users only see one download in the Release.
           - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
-            rust-targets: 'aarch64-apple-darwin'
-          # Intel macOS — produces .app/.dmg for x86_64. Kept as a
-          # separate matrix entry (rather than `--target universal-
-          # apple-darwin`) so the .sig / .app names in the Release stay
-          # arch-specific and match what the updater feed expects.
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-            rust-targets: 'x86_64-apple-darwin'
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
           # Pin to ubuntu-22.04 so the produced AppImage / .deb link
           # against an older glibc and stay compatible with a wider
           # range of distros than the rolling `ubuntu-latest` image.
@@ -65,6 +61,26 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-targets }}
+
+      # `desktop/rust-toolchain.toml` pins a specific channel (1.95.0),
+      # which rustup auto-installs the first time we run `cargo` inside
+      # `desktop/`. The `targets:` input above only attaches the std
+      # component to the `stable` toolchain dtolnay just installed, NOT
+      # to the pinned channel cargo will actually use. Without this step
+      # cross-compiling (e.g. macos-latest [arm64] → x86_64-apple-darwin)
+      # fails with `error[E0463]: can't find crate for std`.
+      - name: Add cross-compile target to pinned toolchain
+        if: matrix.rust-targets != ''
+        working-directory: desktop
+        shell: bash
+        run: |
+          # `rustup show` triggers the rust-toolchain.toml install if it
+          # hasn't happened yet, so `target add` below targets the pinned
+          # channel rather than the default. `rustup target add` takes
+          # space-separated args, but the matrix value is comma-separated
+          # to match the format dtolnay/rust-toolchain expects.
+          rustup show
+          rustup target add $(echo "${{ matrix.rust-targets }}" | tr ',' ' ')
 
       # Tauri 2 on Linux pulls in GTK/WebKit system libs; AppImage build
       # additionally needs `patchelf` and `file`. macOS and Windows pick

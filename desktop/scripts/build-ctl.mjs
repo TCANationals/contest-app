@@ -18,7 +18,7 @@
  * [1] https://v2.tauri.app/reference/environment-variables
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, copyFileSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -58,43 +58,75 @@ function resolveProfile() {
   return 'debug';
 }
 
+function buildOneTarget({ triple, profile, useTargetDir }) {
+  const cargoArgs = ['build', '--manifest-path', join(desktopRoot, 'Cargo.toml'),
+    '-p', 'tca-timer-ctl'];
+  if (profile === 'release') cargoArgs.push('--release');
+  let buildOutDir = join(desktopRoot, 'target', profile);
+  if (useTargetDir) {
+    cargoArgs.push('--target', triple);
+    buildOutDir = join(desktopRoot, 'target', triple, profile);
+  }
+
+  console.log(`[build-ctl] cargo ${cargoArgs.join(' ')}`);
+  execFileSync('cargo', cargoArgs, { stdio: 'inherit', cwd: desktopRoot });
+
+  const isWindows = triple.includes('windows');
+  const exeSuffix = isWindows ? '.exe' : '';
+  const builtBinary = join(buildOutDir, `tca-timer-ctl${exeSuffix}`);
+  if (!existsSync(builtBinary)) {
+    throw new Error(`expected built binary at ${builtBinary} but it was not produced`);
+  }
+  return builtBinary;
+}
+
 function main() {
   const triple = resolveTargetTriple();
   const profile = resolveProfile();
   const isWindows = triple.includes('windows') || process.platform === 'win32';
   const exeSuffix = isWindows ? '.exe' : '';
 
-  const cargoArgs = ['build', '--manifest-path', join(desktopRoot, 'Cargo.toml'),
-    '-p', 'tca-timer-ctl'];
-  if (profile === 'release') cargoArgs.push('--release');
+  console.log(`[build-ctl] target triple: ${triple}`);
+  console.log(`[build-ctl] profile: ${profile}`);
+
+  mkdirSync(binariesDir, { recursive: true });
+  const outBinary = join(binariesDir, `tca-timer-ctl-${triple}${exeSuffix}`);
+
+  // `universal-apple-darwin` is not a real rustc target — `cargo build
+  // --target universal-apple-darwin` fails. Tauri's universal build mode
+  // expects sidecars to be produced for both Apple Silicon and Intel
+  // separately and `lipo`'d into a single fat Mach-O at
+  // `binaries/tca-timer-ctl-universal-apple-darwin`. Do that here so the
+  // workflow can drive a single `tauri build --target universal-apple-darwin`
+  // matrix entry for macOS instead of one per arch.
+  if (triple === 'universal-apple-darwin') {
+    const archTriples = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+    const builtBinaries = archTriples.map((archTriple) =>
+      buildOneTarget({ triple: archTriple, profile, useTargetDir: true })
+    );
+    if (existsSync(outBinary)) rmSync(outBinary);
+    execFileSync('lipo', ['-create', '-output', outBinary, ...builtBinaries], {
+      stdio: 'inherit',
+    });
+    const size = statSync(outBinary).size;
+    console.log(`[build-ctl] lipo ${builtBinaries.join(' + ')} -> ${outBinary} (${size} bytes)`);
+    return;
+  }
+
   // Honour an explicit target triple when one is provided (cross-compile or
   // CI). When TAURI_ENV_TARGET_TRIPLE matches the host triple we deliberately
   // omit `--target` to keep the build artifact under `target/<profile>/`
   // rather than `target/<triple>/<profile>/` — this matches what plain
   // `cargo build` produces and what local developers expect.
-  let buildOutDir = join(desktopRoot, 'target', profile);
+  let useTargetDir = false;
   if (process.env.TAURI_ENV_TARGET_TRIPLE) {
     const hostTriple = execFileSync('rustc', ['--print', 'host-tuple'], { encoding: 'utf8' })
       .trim();
     if (hostTriple !== triple) {
-      cargoArgs.push('--target', triple);
-      buildOutDir = join(desktopRoot, 'target', triple, profile);
+      useTargetDir = true;
     }
   }
-
-  console.log(`[build-ctl] target triple: ${triple}`);
-  console.log(`[build-ctl] profile: ${profile}`);
-  console.log(`[build-ctl] cargo ${cargoArgs.join(' ')}`);
-
-  execFileSync('cargo', cargoArgs, { stdio: 'inherit', cwd: desktopRoot });
-
-  const builtBinary = join(buildOutDir, `tca-timer-ctl${exeSuffix}`);
-  if (!existsSync(builtBinary)) {
-    throw new Error(`expected built binary at ${builtBinary} but it was not produced`);
-  }
-
-  mkdirSync(binariesDir, { recursive: true });
-  const outBinary = join(binariesDir, `tca-timer-ctl-${triple}${exeSuffix}`);
+  const builtBinary = buildOneTarget({ triple, profile, useTargetDir });
   copyFileSync(builtBinary, outBinary);
   const size = statSync(outBinary).size;
   console.log(`[build-ctl] copied ${builtBinary} -> ${outBinary} (${size} bytes)`);
