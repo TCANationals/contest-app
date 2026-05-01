@@ -67,7 +67,15 @@ Implemented in `src/routes/`:
 
 ### Authentication (§8)
 
-- Cloudflare Access JWT verification via `jose` with JWKS caching for 1 hour; extracts `sub`, `email`, `groups`; `judgeRoomAccess` maps groups to room IDs.
+- Server-mediated OIDC login (Authorization Code + PKCE) via
+  `openid-client`. Identity is persisted in an encrypted, signed
+  `tca_sess` cookie (AES-256-GCM, key derived via HKDF from
+  `SESSION_SECRET`). 24-hour sliding TTL with 1-hour renewal. Single
+  provider per deployment — Cloudflare Access (with an OIDC SaaS app),
+  Google, Microsoft, Okta, Auth0, etc. all work behind the same env-driven
+  config. Group membership comes from `OIDC_GROUPS_CLAIM` (default
+  `groups`) plus `OIDC_ADMIN_EMAILS` allowlist; `judgeRoomAccess` then
+  maps `judges-admin` / `judges-<roomId>` to authorized rooms.
 - Contestant: bcrypt(12) hashed room tokens; constant-time compare.
 
 ### Background jobs
@@ -81,7 +89,9 @@ Implemented in `src/routes/`:
 src/
   index.ts                    entry point — Fastify + ws wiring, background jobs
   auth/
-    cf-jwt.ts                 CF Access JWT + ticket LRU (§8.1)
+    identity.ts               JudgeIdentity + group/role mapping + ticket LRU (§8.1)
+    oidc.ts                   OIDC client (discovery, code-flow, claim → identity)
+    session.ts                Encrypted session cookie (AES-256-GCM)
     room-token.ts             bcrypt hash + regexes (§8.2)
   clock.ts                    clock-drift sampler (§11.6)
   db/
@@ -101,6 +111,7 @@ src/
   rooms.ts                    in-memory RoomState + broadcasts (§11.5)
   routes/
     admin.ts                  POST /api/admin/rooms*
+    auth.ts                   /api/auth/{login,callback,logout,me}
     judge.ts                  /api/judge/*
     webhooks.ts               Twilio + SES webhooks
   timer.ts                    timer state machine (§6.5)
@@ -113,5 +124,24 @@ src/
 
 See `.env.example`. All are required in production; the `TWILIO_*` and
 `AWS_*` / `SES_*` groups may be omitted to disable SMS / email,
-respectively. `CF_ACCESS_*` may be omitted in local dev; all `/api/judge/*`
-and `/api/admin/*` routes will respond `401 missing_jwt`.
+respectively.
+
+Auth-related vars:
+
+| Var                   | Required                | Notes |
+| --------------------- | ----------------------- | ----- |
+| `SESSION_SECRET`      | yes (when no bypass)    | ≥32 chars; encryption + integrity for the session cookie |
+| `OIDC_ISSUER`         | yes (when no bypass)    | e.g. `https://<team>.cloudflareaccess.com`, `https://accounts.google.com` |
+| `OIDC_CLIENT_ID`      | yes (when no bypass)    | OIDC client id from the IdP |
+| `OIDC_CLIENT_SECRET`  | typically yes           | confidential client secret; empty string for public clients |
+| `OIDC_REDIRECT_URI`   | yes (when no bypass)    | absolute URL of `/api/auth/callback` as seen by the user agent |
+| `OIDC_SCOPES`         | no                      | default `openid profile email` |
+| `OIDC_GROUPS_CLAIM`   | no                      | ID-token claim that carries groups; default `groups` |
+| `OIDC_ADMIN_EMAILS`   | no                      | comma-separated email allowlist promoted to `judges-admin` |
+| `OIDC_ALLOW_ALL_ROOMS`| no                      | `1`/`true`: every authenticated user becomes admin (single-tenant convenience) |
+| `DEV_AUTH_BYPASS`     | dev only                | `1`/`true`: skip OIDC, synthesize a dev judge identity. Hard-disabled when `NODE_ENV=production`. |
+
+When OIDC is unconfigured (and the dev bypass isn't set), every
+`/api/judge/*` and `/api/admin/*` route responds `401 no_session` with
+a `login` hint pointing at `/api/auth/login`; the SPA's fetch wrapper
+then navigates the browser to that URL to start the IdP redirect.

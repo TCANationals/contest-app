@@ -45,6 +45,36 @@ export const NotifyStatusSchema = z.enum([
 export type NotifyStatus = z.infer<typeof NotifyStatusSchema>;
 
 // ---------------------------------------------------------------------------
+// Session / identity — GET /api/auth/me.
+//
+// Returned on every successful call so the SPA can display the
+// signed-in user, decide which menus to show (admin vs judge), and
+// know which rooms the session can drive even before the WS
+// connects. `access` mirrors `judgeRoomAccess(groups)`: the literal
+// string `"all"` for admins, otherwise the explicit room id list.
+// ---------------------------------------------------------------------------
+
+export const WireMeSchema = z.object({
+  sub: z.string(),
+  email: z.string(),
+  groups: z.array(z.string()),
+  access: z.union([z.literal('all'), z.array(z.string())]),
+});
+export type WireMe = z.infer<typeof WireMeSchema>;
+
+export interface JudgeSession {
+  sub: string;
+  email: string;
+  groups: string[];
+  /** `'all'` (admin) or a list of room ids the session can drive. */
+  access: 'all' | string[];
+}
+
+export function meFromWire(m: WireMe): JudgeSession {
+  return { sub: m.sub, email: m.email, groups: m.groups, access: m.access };
+}
+
+// ---------------------------------------------------------------------------
 // Tickets — POST /api/judge/ticket.
 // ---------------------------------------------------------------------------
 

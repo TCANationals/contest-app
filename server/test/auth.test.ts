@@ -6,7 +6,7 @@ import {
   ticketCache,
   hasRoomAccess,
   TICKET_TTL_MS,
-} from '../src/auth/cf-jwt.js';
+} from '../src/auth/identity.js';
 import {
   CONTESTANT_ID_REGEX,
   ROOM_ID_REGEX,

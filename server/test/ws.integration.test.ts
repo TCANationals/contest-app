@@ -8,7 +8,7 @@ import { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 
 import { buildServer } from '../src/index.js';
-import { ticketCache } from '../src/auth/cf-jwt.js';
+import { ticketCache } from '../src/auth/identity.js';
 import { _resetRooms, getOrCreateRoomState } from '../src/rooms.js';
 
 // Stub DAL. We monkey-patch via module interception: import the real module,

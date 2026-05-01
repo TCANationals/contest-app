@@ -9,7 +9,7 @@ import { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 
 import { buildServer } from '../src/index.js';
-import { ticketCache } from '../src/auth/cf-jwt.js';
+import { ticketCache } from '../src/auth/identity.js';
 import { _resetRooms } from '../src/rooms.js';
 import { __testOverrides } from '../src/db/dal.js';
 

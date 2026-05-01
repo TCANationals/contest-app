@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -25,12 +26,24 @@ export function AppLayout({ room, children }: AppLayoutProps) {
   const connection = useAppStore((s) => s.connection);
   const timer = useAppStore((s) => s.timer);
   const [showRoomPicker, setShowRoomPicker] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   useEffect(() => {
     if (room) touchRecentRoom(room);
   }, [room]);
 
   useJudgeSocket({ room, mintTicket: async () => (await api.mintTicket()).ticket });
+
+  // `/api/auth/me` is the cheapest way to confirm the OIDC session
+  // cookie is live; on 401 the api client redirects the browser to
+  // /api/auth/login. The query is intentionally outside Suspense so
+  // a slow IdP discovery on the server side doesn't block the timer.
+  const meQuery = useQuery({
+    queryKey: ['me'],
+    queryFn: () => api.me(),
+    staleTime: 60_000,
+    retry: false,
+  });
 
   const onSwitchRoom = () => setShowRoomPicker((v) => !v);
 
@@ -71,6 +84,49 @@ export function AppLayout({ room, children }: AppLayoutProps) {
           >
             Rooms
           </Link>
+          {meQuery.data && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowUserMenu((v) => !v)}
+                className="flex items-center gap-1 text-sm text-slate-700 hover:text-slate-900"
+                aria-haspopup="menu"
+                aria-expanded={showUserMenu}
+              >
+                <span className="hidden sm:inline truncate max-w-[10rem]">
+                  {meQuery.data.email || meQuery.data.sub}
+                </span>
+                <span aria-hidden="true" className="text-slate-400 text-xs">
+                  ▾
+                </span>
+              </button>
+              {showUserMenu && (
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-2 w-48 bg-white border border-slate-200 rounded shadow-md z-30"
+                >
+                  <div className="px-3 py-2 text-xs text-slate-500 border-b border-slate-100">
+                    <div className="truncate">{meQuery.data.email || '—'}</div>
+                    <div className="truncate font-mono text-[10px]">
+                      {meQuery.data.access === 'all'
+                        ? 'admin (all rooms)'
+                        : `${meQuery.data.access.length} room(s)`}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      void api.logout();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 

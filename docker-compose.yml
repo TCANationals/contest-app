@@ -120,18 +120,21 @@ services:
     environment:
       PORT: "3000"
       DATABASE_URL: postgres://tca_timer:tca_timer_dev@db:5432/tca_timer
-      # Local dev: run without Cloudflare Access JWT verification. The
-      # `DEV_AUTH_BYPASS` flag (handled in `server/src/auth/cf-jwt.ts`)
-      # makes every `/api/judge/*` and `/api/admin/*` request resolve
-      # to a synthetic admin identity so the SPA is usable end to end.
-      # The flag is hard-disabled when NODE_ENV=production. To exercise
-      # the real CF Access path, unset DEV_AUTH_BYPASS and populate
-      # CF_ACCESS_* (via a repo-root `.env` or
-      # `docker compose run --rm -e CF_ACCESS_AUD=… server`).
+      # Local dev: run without an OIDC provider in front of the server.
+      # The `DEV_AUTH_BYPASS` flag (handled in
+      # `server/src/auth/identity.ts`) makes every `/api/judge/*`,
+      # `/api/admin/*`, and `/api/auth/login` request resolve to a
+      # synthetic admin identity so the SPA is usable end to end with
+      # no IdP round-trip. The flag is hard-disabled when
+      # NODE_ENV=production. To exercise the real OIDC path locally,
+      # unset DEV_AUTH_BYPASS and populate OIDC_* + SESSION_SECRET
+      # (via a repo-root `.env` or `docker compose run --rm -e ...`).
       DEV_AUTH_BYPASS: "1"
-      CF_ACCESS_AUD: ""
-      CF_ACCESS_ISSUER: ""
-      CF_ACCESS_JWKS_URL: ""
+      OIDC_ISSUER: ""
+      OIDC_CLIENT_ID: ""
+      OIDC_CLIENT_SECRET: ""
+      OIDC_REDIRECT_URI: ""
+      SESSION_SECRET: ""
       PUBLIC_ORIGIN: "http://localhost:5173"
       NODE_ENV: development
     ports:
