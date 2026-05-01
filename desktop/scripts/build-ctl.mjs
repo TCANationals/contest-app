@@ -18,7 +18,7 @@
  * [1] https://v2.tauri.app/reference/environment-variables
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, copyFileSync, existsSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -93,23 +93,27 @@ function main() {
   const outBinary = join(binariesDir, `tca-timer-ctl-${triple}${exeSuffix}`);
 
   // `universal-apple-darwin` is not a real rustc target — `cargo build
-  // --target universal-apple-darwin` fails. Tauri's universal build mode
-  // expects sidecars to be produced for both Apple Silicon and Intel
-  // separately and `lipo`'d into a single fat Mach-O at
-  // `binaries/tca-timer-ctl-universal-apple-darwin`. Do that here so the
-  // workflow can drive a single `tauri build --target universal-apple-darwin`
-  // matrix entry for macOS instead of one per arch.
+  // --target universal-apple-darwin` fails. When invoked with
+  // `--target universal-apple-darwin`, Tauri builds the desktop crate
+  // twice (once per arch) and the `tauri-build` build script checks for a
+  // per-arch sidecar at `binaries/tca-timer-ctl-<arch>-apple-darwin`
+  // before each cargo build proceeds. Tauri itself `lipo`s the sidecars
+  // into the final bundle, so we just need to produce both per-arch
+  // binaries here — NOT a pre-fattened `tca-timer-ctl-universal-apple-darwin`,
+  // which Tauri doesn't look for.
   if (triple === 'universal-apple-darwin') {
     const archTriples = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
-    const builtBinaries = archTriples.map((archTriple) =>
-      buildOneTarget({ triple: archTriple, profile, useTargetDir: true })
-    );
-    if (existsSync(outBinary)) rmSync(outBinary);
-    execFileSync('lipo', ['-create', '-output', outBinary, ...builtBinaries], {
-      stdio: 'inherit',
-    });
-    const size = statSync(outBinary).size;
-    console.log(`[build-ctl] lipo ${builtBinaries.join(' + ')} -> ${outBinary} (${size} bytes)`);
+    for (const archTriple of archTriples) {
+      const builtBinary = buildOneTarget({
+        triple: archTriple,
+        profile,
+        useTargetDir: true,
+      });
+      const archOutBinary = join(binariesDir, `tca-timer-ctl-${archTriple}`);
+      copyFileSync(builtBinary, archOutBinary);
+      const archSize = statSync(archOutBinary).size;
+      console.log(`[build-ctl] copied ${builtBinary} -> ${archOutBinary} (${archSize} bytes)`);
+    }
     return;
   }
 
