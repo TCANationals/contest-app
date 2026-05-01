@@ -410,9 +410,8 @@ function ConfigError({
 function contestantUrlFromBootstrap(b: BootstrapPayload): string {
   const cfg = b.config!;
   return buildContestantUrl({
-    room: cfg.room,
+    roomKey: cfg.roomKey,
     contestantId: b.contestantId,
-    roomToken: cfg.roomToken,
     serverHost: cfg.serverHost,
   });
 }

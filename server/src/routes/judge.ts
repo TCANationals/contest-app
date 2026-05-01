@@ -13,15 +13,14 @@ import type {
 } from '@tca-timer/shared/api';
 
 import {
-  verifyCfAccessJwt,
   ticketCache,
   judgeRoomAccess,
   hasRoomAccess,
-  loadCfJwtConfig,
   isDevAuthBypassEnabled,
-  devAuthBypassIdentity,
   type JudgeIdentity,
-} from '../auth/cf-jwt.js';
+} from '../auth/identity.js';
+import { identityFromRequest } from '../auth/session.js';
+import { loadOidcConfig } from '../auth/oidc.js';
 import {
   listActiveRooms,
   getJudgePrefs,
@@ -32,46 +31,37 @@ import {
   insertAuditEvent,
   type JudgePrefsRow,
 } from '../db/dal.js';
-import { ROOM_ID_REGEX } from '../auth/room-token.js';
+import { ROOM_ID_REGEX } from '../auth/identifiers.js';
 import { isE164 } from '../notify/twilio.js';
 import { isEmailAddress } from '../notify/ses.js';
 
 type MaybeWithAuth = FastifyRequest & { judgeIdentity?: JudgeIdentity };
 
+/**
+ * Resolve the calling judge's identity from the encrypted session
+ * cookie (set by `routes/auth.ts` after a successful OIDC callback)
+ * or, in dev, the synthetic dev-bypass identity. Responds with 401
+ * `no_session` and a `WWW-Authenticate` header that points the SPA at
+ * the login redirect; the SPA traps the 401 and navigates the browser.
+ */
 async function requireJudge(
   req: MaybeWithAuth,
   reply: FastifyReply,
 ): Promise<JudgeIdentity | null> {
   if (req.judgeIdentity) return req.judgeIdentity;
-
-  // Dev-only escape hatch (see `auth/cf-jwt.ts`). Disabled when
-  // NODE_ENV=production so a misconfigured prod env can't drop auth.
-  if (isDevAuthBypassEnabled()) {
-    const id = devAuthBypassIdentity();
+  const id = identityFromRequest(req, reply);
+  if (id) {
     req.judgeIdentity = id;
     return id;
   }
-
-  const headerJwt =
-    (req.headers['cf-access-jwt-assertion'] as string | undefined) ??
-    (req.headers['Cf-Access-Jwt-Assertion'] as string | undefined);
-  const cookie = (req as FastifyRequest & { cookies?: Record<string, string> }).cookies
-    ?.CF_Authorization;
-  const jwt = headerJwt || cookie;
-
-  if (!jwt) {
-    void reply.code(401).send({ error: 'missing_jwt' });
-    return null;
-  }
-
-  try {
-    const id = await verifyCfAccessJwt(jwt);
-    req.judgeIdentity = id;
-    return id;
-  } catch (err) {
-    void reply.code(401).send({ error: 'bad_jwt', detail: (err as Error).message });
-    return null;
-  }
+  // The login redirect is server-issued (302 from /api/auth/login),
+  // but we can't 302 a fetch() XHR — the browser would silently
+  // follow it and the SPA would parse the IdP HTML as JSON. Instead,
+  // return 401 with a hint so the SPA's fetch wrapper can navigate
+  // the *browser* to /api/auth/login.
+  reply.header('www-authenticate', 'Session realm="tca-timer", login="/api/auth/login"');
+  void reply.code(401).send({ error: 'no_session', login: '/api/auth/login' });
+  return null;
 }
 
 export function registerJudgeRoutes(app: FastifyInstance): void {
@@ -305,13 +295,11 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
 
   app.addHook('onReady', async () => {
     if (isDevAuthBypassEnabled()) {
-      const id = devAuthBypassIdentity();
       app.log.warn(
-        { sub: id.sub, email: id.email, groups: id.groups },
-        'DEV_AUTH_BYPASS active — JWT verification disabled, all requests run as the synthetic dev judge. Never enable in production.',
+        'DEV_AUTH_BYPASS active — OIDC verification disabled, all requests run as the synthetic dev judge. Never enable in production.',
       );
-    } else if (!loadCfJwtConfig()) {
-      app.log.warn('CF Access config not set; /api/judge/* will reject all requests');
+    } else if (!loadOidcConfig()) {
+      app.log.warn('OIDC config not set; /api/judge/* will reject all requests until the operator configures OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_REDIRECT_URI / SESSION_SECRET');
     }
   });
 

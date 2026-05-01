@@ -6,13 +6,12 @@ import {
   ticketCache,
   hasRoomAccess,
   TICKET_TTL_MS,
-} from '../src/auth/cf-jwt.js';
+} from '../src/auth/identity.js';
 import {
   CONTESTANT_ID_REGEX,
   ROOM_ID_REGEX,
-  hashRoomToken,
-  verifyRoomTokenHash,
-} from '../src/auth/room-token.js';
+  ROOM_KEY_REGEX,
+} from '../src/auth/identifiers.js';
 
 describe('judgeRoomAccess', () => {
   it('returns all for admin group', () => {
@@ -63,13 +62,27 @@ describe('identifier regexes', () => {
   });
 });
 
-describe('room token hashing', () => {
-  it('hash + verify round-trip', async () => {
-    const token = 'supersecrettoken-1234';
-    const hash = await hashRoomToken(token);
-    assert.equal(await verifyRoomTokenHash(token, hash), true);
-    assert.equal(await verifyRoomTokenHash('wrongtoken', hash), false);
-    assert.equal(await verifyRoomTokenHash(token, ''), false);
+describe('room key regex', () => {
+  it('accepts URL-safe base64 keys of reasonable length', () => {
+    for (const key of [
+      'abcdef0123456789',
+      'dev-room-key-0123456789',
+      'Q-_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345',
+    ]) {
+      assert.ok(ROOM_KEY_REGEX.test(key), `${key} should match`);
+    }
+  });
+
+  it('rejects empty, too-short, too-long, and non-URL-safe keys', () => {
+    for (const key of [
+      '',
+      'short',
+      'has space0123456789',
+      'has/slash01234567',
+      'a'.repeat(129),
+    ]) {
+      assert.ok(!ROOM_KEY_REGEX.test(key), `${key} should not match`);
+    }
   });
 });
 

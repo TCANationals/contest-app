@@ -249,6 +249,20 @@ export function installDemoMode(): void {
     // ever added or renamed, this shim has to be updated in lockstep
     // — the spa/test/demoMode.test.ts suite asserts that.
 
+    if (u.pathname === '/api/auth/me' && method === 'GET') {
+      // WireMeSchema: { sub, email, groups, access }. Demo mode pretends
+      // the user is fully signed in with admin access so the SPA's
+      // identity menu and admin-only nav both render.
+      return jsonResponse({
+        sub: 'demo-judge',
+        email: 'demo@example.com',
+        groups: ['judges-admin'],
+        access: 'all',
+      });
+    }
+    if (u.pathname === '/api/auth/logout' && method === 'POST') {
+      return jsonResponse({ ok: true });
+    }
     if (u.pathname === '/api/judge/ticket' && method === 'POST') {
       // WireTicketSchema: { ticket, expiresInMs }. Demo previously
       // emitted `expiresAt`, the SPA-facing field, which fails

@@ -1,24 +1,22 @@
 //! Desktop configuration resolution (§9.4).
 //!
-//! At launch, the overlay resolves `room`, `roomToken`, and `serverHost`
-//! by checking these sources in priority order, picking the first source
+//! At launch, the overlay resolves `roomKey` and `serverHost` by
+//! checking these sources in priority order, picking the first source
 //! that supplies a non-empty value for each key independently:
 //!
-//! 1. Command-line flags: `--room <id>`, `--room-token <token>`,
-//!    `--server <host>`.
+//! 1. Command-line flags: `--room-key <key>`, `--server <host>`.
 //! 2. Windows registry (production):
-//!    `HKLM\Software\TCANationals\Timer\Room`, `\RoomToken`, `\Server`.
+//!    `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`.
 //! 3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
 //!    `/Library/Application Support/TCATimer/config.json` on macOS, and
-//!    `/etc/tca-timer/config.json` on Linux. JSON keys `room`,
-//!    `roomToken`, `server`.
-//! 4. Environment variables: `TCA_TIMER_ROOM`, `TCA_TIMER_ROOM_TOKEN`,
-//!    `TCA_TIMER_SERVER`.
+//!    `/etc/tca-timer/config.json` on Linux. JSON keys `roomKey`,
+//!    `server`.
+//! 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`.
 //!
-//! `room` and `roomToken` have no default — if no source supplies them,
-//! the overlay renders a "Configuration error" banner instead of
-//! attempting a connection. `serverHost` defaults to
-//! [`DEFAULT_SERVER_HOST`] when no source supplies it.
+//! `roomKey` has no default — if no source supplies it, the overlay
+//! renders a "Configuration error" banner instead of attempting a
+//! connection. `serverHost` defaults to [`DEFAULT_SERVER_HOST`] when
+//! no source supplies it.
 //!
 //! The module is written against an injected [`ConfigSources`] snapshot so
 //! tests can assert every resolution branch without touching real
@@ -36,8 +34,7 @@ pub const DEFAULT_SERVER_HOST: &str = "timer.tcanationals.com";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopConfig {
-    pub room: String,
-    pub room_token: String,
+    pub room_key: String,
     pub server_host: String,
 }
 
@@ -50,11 +47,10 @@ impl DesktopConfig {
     #[allow(dead_code)]
     pub fn contestant_ws_url(&self, contestant_id: &str) -> String {
         format!(
-            "wss://{host}/contestant?room={room}&id={id}&token={token}",
+            "wss://{host}/contestant?key={key}&id={id}",
             host = self.server_host,
-            room = urlencode(&self.room),
+            key = urlencode(&self.room_key),
             id = urlencode(contestant_id),
-            token = urlencode(&self.room_token),
         )
     }
 }
@@ -69,7 +65,7 @@ pub struct ConfigReport {
     pub default_server_host: &'static str,
 }
 
-/// Per-source outcome entry. `found` lists the keys (`room`, `roomToken`,
+/// Per-source outcome entry. `found` lists the keys (`roomKey`,
 /// `server`) that this specific source actually supplied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,8 +102,7 @@ impl std::error::Error for ConfigError {}
 /// resolution.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SourceValues {
-    pub room: Option<String>,
-    pub room_token: Option<String>,
+    pub room_key: Option<String>,
     pub server: Option<String>,
 }
 
@@ -118,19 +113,15 @@ impl SourceValues {
 
     fn normalize(self) -> Self {
         Self {
-            room: Self::nonempty(self.room),
-            room_token: Self::nonempty(self.room_token),
+            room_key: Self::nonempty(self.room_key),
             server: Self::nonempty(self.server),
         }
     }
 
     fn found_keys(&self) -> Vec<&'static str> {
         let mut v = Vec::new();
-        if self.room.is_some() {
-            v.push("room");
-        }
-        if self.room_token.is_some() {
-            v.push("roomToken");
+        if self.room_key.is_some() {
+            v.push("roomKey");
         }
         if self.server.is_some() {
             v.push("server");
@@ -160,9 +151,7 @@ pub struct SourceEntry {
 impl SourceEntry {
     fn from_values(values: SourceValues) -> Self {
         let normalized = values.normalize();
-        let available = normalized.room.is_some()
-            || normalized.room_token.is_some()
-            || normalized.server.is_some();
+        let available = normalized.room_key.is_some() || normalized.server.is_some();
         Self {
             available,
             values: normalized,
@@ -180,8 +169,7 @@ pub fn parse_cli_args(argv: &[String]) -> SourceEntry {
     while let Some(arg) = iter.next() {
         let (flag, inline_value) = split_flag(arg);
         let slot: &mut Option<String> = match flag {
-            "--room" => &mut values.room,
-            "--room-token" => &mut values.room_token,
+            "--room-key" => &mut values.room_key,
             "--server" | "--server-host" => &mut values.server,
             _ => continue,
         };
@@ -208,14 +196,12 @@ pub fn parse_config_file(contents: &str) -> SourceEntry {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct FileShape {
-        room: Option<String>,
-        room_token: Option<String>,
+        room_key: Option<String>,
         server: Option<String>,
     }
     match serde_json::from_str::<FileShape>(contents) {
         Ok(shape) => SourceEntry::from_values(SourceValues {
-            room: shape.room,
-            room_token: shape.room_token,
+            room_key: shape.room_key,
             server: shape.server,
         }),
         Err(err) => SourceEntry {
@@ -309,8 +295,7 @@ fn read_registry_windows() -> std::io::Result<SourceValues> {
         Ok(key) => {
             let get = |name: &str| -> Option<String> { key.get_value::<String, _>(name).ok() };
             Ok(SourceValues {
-                room: get("Room"),
-                room_token: get("RoomToken"),
+                room_key: get("RoomKey"),
                 server: get("Server"),
             })
         }
@@ -322,8 +307,7 @@ fn read_registry_windows() -> std::io::Result<SourceValues> {
 /// Read relevant environment variables.
 pub fn read_env() -> SourceEntry {
     SourceEntry::from_values(SourceValues {
-        room: std::env::var("TCA_TIMER_ROOM").ok(),
-        room_token: std::env::var("TCA_TIMER_ROOM_TOKEN").ok(),
+        room_key: std::env::var("TCA_TIMER_ROOM_KEY").ok(),
         server: std::env::var("TCA_TIMER_SERVER").ok(),
     })
 }
@@ -344,7 +328,7 @@ impl ConfigSources {
     }
 }
 
-/// Resolve the three config values using the priority order in §9.4.
+/// Resolve the config values using the priority order in §9.4.
 pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport), ConfigError> {
     let ordered: [(&'static str, &SourceEntry); 4] = [
         ("cli", &sources.cli),
@@ -353,8 +337,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
         ("env", &sources.env),
     ];
 
-    let mut room: Option<String> = None;
-    let mut room_token: Option<String> = None;
+    let mut room_key: Option<String> = None;
     let mut server: Option<String> = None;
 
     let mut outcomes = Vec::with_capacity(ordered.len());
@@ -365,14 +348,9 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
             found: entry.values.found_keys(),
             note: entry.note.clone(),
         });
-        if room.is_none() {
-            if let Some(v) = entry.values.room.clone() {
-                room = Some(v);
-            }
-        }
-        if room_token.is_none() {
-            if let Some(v) = entry.values.room_token.clone() {
-                room_token = Some(v);
+        if room_key.is_none() {
+            if let Some(v) = entry.values.room_key.clone() {
+                room_key = Some(v);
             }
         }
         if server.is_none() {
@@ -388,11 +366,8 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
     };
 
     let mut missing: Vec<&'static str> = Vec::new();
-    if room.is_none() {
-        missing.push("room");
-    }
-    if room_token.is_none() {
-        missing.push("roomToken");
+    if room_key.is_none() {
+        missing.push("roomKey");
     }
 
     if !missing.is_empty() {
@@ -401,8 +376,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
 
     Ok((
         DesktopConfig {
-            room: room.expect("room present"),
-            room_token: room_token.expect("roomToken present"),
+            room_key: room_key.expect("roomKey present"),
             server_host: server.unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned()),
         },
         report,
@@ -411,8 +385,8 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
 
 #[allow(dead_code)]
 fn urlencode(s: &str) -> String {
-    // We only need a minimal encoder — contestant IDs, room IDs, and
-    // tokens are all drawn from a narrow character set per §3.1 and §4.1.
+    // We only need a minimal encoder — contestant IDs and room keys are
+    // drawn from a narrow character set per §3.1 and §8.2.
     // Non-alphanumerics that appear (`-`, `.`, `_`) are URL-safe. Anything
     // else (shouldn't happen in practice) is percent-encoded.
     let mut out = String::with_capacity(s.len());
@@ -433,10 +407,9 @@ fn urlencode(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn vals(room: &str, token: &str, server: &str) -> SourceValues {
+    fn vals(key: &str, server: &str) -> SourceValues {
         SourceValues {
-            room: opt(room),
-            room_token: opt(token),
+            room_key: opt(key),
             server: opt(server),
         }
     }
@@ -452,74 +425,70 @@ mod tests {
     #[test]
     fn defaults_to_timer_tcanationals_com_when_no_source_supplies_server() {
         let sources = ConfigSources {
-            cli: SourceEntry::from_values(vals("r1", "tok", "")),
+            cli: SourceEntry::from_values(vals("key-abcdef0123456789", "")),
             ..Default::default()
         };
         let (cfg, _) = resolve(&sources).expect("resolves");
         assert_eq!(cfg.server_host, "timer.tcanationals.com");
-        assert_eq!(cfg.room, "r1");
-        assert_eq!(cfg.room_token, "tok");
+        assert_eq!(cfg.room_key, "key-abcdef0123456789");
     }
 
     #[test]
     fn cli_args_win_over_lower_priority_sources() {
         let sources = ConfigSources {
-            cli: SourceEntry::from_values(vals("cli-room", "cli-tok", "cli.host")),
-            registry: SourceEntry::from_values(vals("reg-room", "reg-tok", "reg.host")),
-            file: SourceEntry::from_values(vals("file-room", "file-tok", "file.host")),
-            env: SourceEntry::from_values(vals("env-room", "env-tok", "env.host")),
+            cli: SourceEntry::from_values(vals("cli-key", "cli.host")),
+            registry: SourceEntry::from_values(vals("reg-key", "reg.host")),
+            file: SourceEntry::from_values(vals("file-key", "file.host")),
+            env: SourceEntry::from_values(vals("env-key", "env.host")),
         };
         let (cfg, _) = resolve(&sources).unwrap();
-        assert_eq!(cfg.room, "cli-room");
-        assert_eq!(cfg.room_token, "cli-tok");
+        assert_eq!(cfg.room_key, "cli-key");
         assert_eq!(cfg.server_host, "cli.host");
     }
 
     #[test]
     fn priority_falls_through_per_key_independently() {
-        // CLI supplies only server, registry supplies token, env supplies
-        // room — each key resolves from its own first source.
+        // CLI supplies only server, env supplies the room key — each key
+        // resolves from its own first source.
         let sources = ConfigSources {
-            cli: SourceEntry::from_values(vals("", "", "cli.host")),
-            registry: SourceEntry::from_values(vals("", "reg-tok", "")),
+            cli: SourceEntry::from_values(vals("", "cli.host")),
+            registry: SourceEntry::default(),
             file: SourceEntry::default(),
-            env: SourceEntry::from_values(vals("env-room", "", "")),
+            env: SourceEntry::from_values(vals("env-key", "")),
         };
         let (cfg, _) = resolve(&sources).unwrap();
-        assert_eq!(cfg.room, "env-room");
-        assert_eq!(cfg.room_token, "reg-tok");
+        assert_eq!(cfg.room_key, "env-key");
         assert_eq!(cfg.server_host, "cli.host");
     }
 
     #[test]
     fn empty_strings_are_treated_as_absent() {
         let sources = ConfigSources {
-            cli: SourceEntry::from_values(vals("", "   ", "")),
-            env: SourceEntry::from_values(vals("r", "t", "s")),
+            cli: SourceEntry::from_values(vals("   ", "")),
+            env: SourceEntry::from_values(vals("k", "s")),
             ..Default::default()
         };
         let (cfg, _) = resolve(&sources).unwrap();
-        assert_eq!(cfg.room, "r");
-        assert_eq!(cfg.room_token, "t");
+        assert_eq!(cfg.room_key, "k");
         assert_eq!(cfg.server_host, "s");
     }
 
     #[test]
-    fn missing_room_is_reported_in_config_error() {
+    fn missing_room_key_is_reported_in_config_error() {
         let sources = ConfigSources {
-            cli: SourceEntry::from_values(vals("", "tok", "")),
+            cli: SourceEntry::from_values(vals("", "h.example")),
             ..Default::default()
         };
         let err = resolve(&sources).unwrap_err();
-        assert_eq!(err.missing, vec!["room"]);
+        assert_eq!(err.missing, vec!["roomKey"]);
         assert_eq!(err.report.default_server_host, "timer.tcanationals.com");
     }
 
     #[test]
-    fn missing_both_room_and_token_reports_both() {
+    fn missing_everything_reports_room_key() {
         let sources = ConfigSources::default();
         let err = resolve(&sources).unwrap_err();
-        assert_eq!(err.missing, vec!["room", "roomToken"]);
+        assert_eq!(err.missing, vec!["roomKey"]);
         assert_eq!(err.report.sources.len(), 4);
         assert!(err
             .report
@@ -531,31 +500,31 @@ mod tests {
     #[test]
     fn report_records_per_source_found_keys() {
         let sources = ConfigSources {
-            cli: SourceEntry::from_values(vals("r", "", "")),
-            file: SourceEntry::from_values(vals("", "t", "")),
-            env: SourceEntry::from_values(vals("", "", "h")),
+            cli: SourceEntry::from_values(vals("k", "")),
+            file: SourceEntry::default(),
+            env: SourceEntry::from_values(vals("", "h")),
             ..Default::default()
         };
         let (_, report) = resolve(&sources).unwrap();
         let names: Vec<_> = report.sources.iter().map(|s| s.source).collect();
         assert_eq!(names, vec!["cli", "registry", "file", "env"]);
-        assert_eq!(report.sources[0].found, vec!["room"]);
+        assert_eq!(report.sources[0].found, vec!["roomKey"]);
         assert!(report.sources[1].found.is_empty());
-        assert_eq!(report.sources[2].found, vec!["roomToken"]);
+        assert!(report.sources[2].found.is_empty());
         assert_eq!(report.sources[3].found, vec!["server"]);
     }
 
     #[test]
     fn parse_cli_accepts_equals_and_space_forms() {
         let entry = parse_cli_args(&[
-            "--room=demo".to_string(),
-            "--room-token".to_string(),
-            "hunter2".to_string(),
+            "--room-key=hunter2-key-0123456789".to_string(),
             "--server".to_string(),
             "my.host".to_string(),
         ]);
-        assert_eq!(entry.values.room.as_deref(), Some("demo"));
-        assert_eq!(entry.values.room_token.as_deref(), Some("hunter2"));
+        assert_eq!(
+            entry.values.room_key.as_deref(),
+            Some("hunter2-key-0123456789"),
+        );
         assert_eq!(entry.values.server.as_deref(), Some("my.host"));
     }
 
@@ -564,20 +533,24 @@ mod tests {
         let entry = parse_cli_args(&[
             "--weird".to_string(),
             "stuff".to_string(),
-            "--room".to_string(),
-            "demo".to_string(),
+            "--room-key".to_string(),
+            "demo-key-0123456789".to_string(),
         ]);
-        assert_eq!(entry.values.room.as_deref(), Some("demo"));
-        assert!(entry.values.room_token.is_none());
+        assert_eq!(
+            entry.values.room_key.as_deref(),
+            Some("demo-key-0123456789"),
+        );
     }
 
     #[test]
     fn parse_config_file_accepts_all_keys_and_ignores_extras() {
         let entry = parse_config_file(
-            r#"{"room":"r1","roomToken":"t1","server":"s.example","ignored":42}"#,
+            r#"{"roomKey":"k1-0123456789abcdef","server":"s.example","ignored":42}"#,
         );
-        assert_eq!(entry.values.room.as_deref(), Some("r1"));
-        assert_eq!(entry.values.room_token.as_deref(), Some("t1"));
+        assert_eq!(
+            entry.values.room_key.as_deref(),
+            Some("k1-0123456789abcdef"),
+        );
         assert_eq!(entry.values.server.as_deref(), Some("s.example"));
         assert!(entry.note.is_none());
     }
@@ -592,14 +565,13 @@ mod tests {
     #[test]
     fn contestant_ws_url_embeds_host_and_scopes_per_spec() {
         let cfg = DesktopConfig {
-            room: "nationals-2026".to_string(),
-            room_token: "hunter2".to_string(),
+            room_key: "hunter2-key-0123456789".to_string(),
             server_host: "timer.tcanationals.com".to_string(),
         };
         let url = cfg.contestant_ws_url("contestant-07");
         assert_eq!(
             url,
-            "wss://timer.tcanationals.com/contestant?room=nationals-2026&id=contestant-07&token=hunter2"
+            "wss://timer.tcanationals.com/contestant?key=hunter2-key-0123456789&id=contestant-07"
         );
     }
 
@@ -630,12 +602,11 @@ mod tests {
     #[test]
     fn contestant_ws_url_percent_encodes_unexpected_chars() {
         let cfg = DesktopConfig {
-            room: "r".to_string(),
-            room_token: "a b".to_string(),
+            room_key: "a b".to_string(),
             server_host: "h".to_string(),
         };
         let url = cfg.contestant_ws_url("user@domain");
         assert!(url.contains("id=user%40domain"));
-        assert!(url.contains("token=a%20b"));
+        assert!(url.contains("key=a%20b"));
     }
 }

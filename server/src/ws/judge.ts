@@ -3,8 +3,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import { ticketCache, hasRoomAccess, type TicketRecord } from '../auth/cf-jwt.js';
-import { ROOM_ID_REGEX } from '../auth/room-token.js';
+import { ticketCache, hasRoomAccess, type TicketRecord } from '../auth/identity.js';
+import { ROOM_ID_REGEX } from '../auth/identifiers.js';
 import {
   getOrCreateRoomState,
   broadcastState,

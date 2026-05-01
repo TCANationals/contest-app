@@ -7,8 +7,12 @@
  * intentionally tiny — just the SPA-specific HTTP machinery (cookies,
  * vite-proxied paths, runtime validation, error wrapping).
  *
- * Cloudflare Access handles auth at the edge via the `CF_Authorization`
- * cookie, which the browser sends automatically with `credentials: 'include'`.
+ * Auth: the server is an OIDC client (`server/src/auth/oidc.ts`) and
+ * sets an encrypted, HttpOnly `tca_sess` cookie after a successful
+ * login. The browser sends it automatically with `credentials: 'include'`.
+ * When the cookie is missing or expired, the server returns 401
+ * `no_session`; this module traps that and navigates the *browser* to
+ * `/api/auth/login?return_to=…` so the IdP redirect dance can run.
  *
  * Every response body is validated against the shared zod schema before
  * being returned. Contract drift between the server and the SPA used
@@ -20,18 +24,21 @@
 import { z } from 'zod';
 
 import {
+  WireMeSchema,
   WireTicketSchema,
   WireRoomsEnvelopeSchema,
   WireAuditEnvelopeSchema,
   WirePrefsEnvelopeSchema,
   WireVerifyPhoneSchema,
   WireVerifyEmailSchema,
+  meFromWire,
   prefsFromWire,
   prefsPatchToWire,
   roomFromWire,
   type TicketResponse,
   type RoomListEntry,
   type JudgePrefs,
+  type JudgeSession,
   type AuditLogEntry,
 } from '@tca-timer/shared/api';
 
@@ -39,6 +46,7 @@ export type {
   TicketResponse,
   RoomListEntry,
   JudgePrefs,
+  JudgeSession,
   AuditLogEntry,
   NotifyStatus,
 } from '@tca-timer/shared/api';
@@ -49,6 +57,34 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+/**
+ * 401 → full-page redirect to the OIDC login flow.
+ *
+ * Why a full-page redirect rather than letting `fetch` follow the IdP
+ * 302: browsers silently follow 30x for XHR/fetch, and the IdP would
+ * respond with HTML that we'd then try to JSON-parse. The server
+ * therefore answers protected endpoints with 401 + a `login` hint
+ * instead, and we hand the browser the URL so it does the navigation
+ * (which the IdP can then properly 302).
+ *
+ * The `return_to` query string brings the user back to where they
+ * were once the callback fires. Same-origin paths only — guarded on
+ * the server side as well to avoid open-redirect abuse.
+ */
+function redirectToLogin(): never {
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const url = `/api/auth/login?return_to=${encodeURIComponent(here)}`;
+  // Best-effort: don't redirect-loop if we're already on a login URL.
+  if (!window.location.pathname.startsWith('/api/auth/')) {
+    window.location.assign(url);
+  }
+  // The promise never resolves — the navigation aborts the call.
+  // Throwing keeps TypeScript happy and ensures react-query treats
+  // the call as a failure (not a successful undefined) if for some
+  // reason the navigation doesn't happen.
+  throw new ApiError(401, 'redirecting to login');
 }
 
 async function req<T>(
@@ -74,6 +110,9 @@ async function req<T>(
     headers,
   };
   const res = await fetch(path, merged);
+  if (res.status === 401) {
+    redirectToLogin();
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, text || `${res.status} ${res.statusText}`);
@@ -111,6 +150,18 @@ function describeIssues(issues: z.ZodIssue[]): string {
 }
 
 export const api = {
+  me: async (): Promise<JudgeSession> => {
+    const res = await req('/api/auth/me', WireMeSchema);
+    return meFromWire(res);
+  },
+
+  logout: async (): Promise<void> => {
+    // Bypasses `req()` so we don't trip the 401-redirect trap when the
+    // server reports "no session" on the way out.
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    window.location.assign('/');
+  },
+
   mintTicket: async (): Promise<TicketResponse> => {
     const res = await req('/api/judge/ticket', WireTicketSchema, {
       method: 'POST',

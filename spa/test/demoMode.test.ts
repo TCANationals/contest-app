@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  WireMeSchema,
   WireTicketSchema,
   WireRoomsEnvelopeSchema,
   WireAuditEnvelopeSchema,
@@ -63,6 +64,22 @@ afterEach(() => {
 });
 
 describe('demoMode REST shim matches wire schemas', () => {
+  it('GET /api/auth/me returns WireMe with admin access', async () => {
+    const res = await window.fetch('/api/auth/me');
+    expect(res.ok).toBe(true);
+    const parsed = WireMeSchema.safeParse(await res.json());
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.access).toBe('all');
+      expect(parsed.data.email.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('POST /api/auth/logout returns ok', async () => {
+    const res = await window.fetch('/api/auth/logout', { method: 'POST' });
+    expect(res.ok).toBe(true);
+  });
+
   it('POST /api/judge/ticket returns WireTicket envelope', async () => {
     const res = await window.fetch('/api/judge/ticket', { method: 'POST' });
     expect(res.ok).toBe(true);

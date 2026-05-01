@@ -8,7 +8,7 @@ import { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 
 import { buildServer } from '../src/index.js';
-import { ticketCache } from '../src/auth/cf-jwt.js';
+import { ticketCache } from '../src/auth/identity.js';
 import { _resetRooms, getOrCreateRoomState } from '../src/rooms.js';
 
 // Stub DAL. We monkey-patch via module interception: import the real module,
@@ -94,25 +94,20 @@ async function close(sock: FramedSocket): Promise<void> {
 describe('WebSocket integration', () => {
   let app: App;
   let baseUrl: string;
-  let token: string;
+  let roomKey: string;
 
   before(async () => {
-    const bcrypt = (await import('bcrypt')).default;
-    token = 'test-room-token';
-    const hash = await bcrypt.hash(token, 4);
+    roomKey = 'test-room-key-0123456789';
 
-    __testOverrides.getRoom = async (id) => {
-      if (id === 'nationals-2026') {
-        return {
-          id,
-          display_label: 'Nationals 2026',
-          token_hash: hash,
-          created_at: new Date(),
-          archived_at: null,
-        };
-      }
-      return null;
+    const room = {
+      id: 'nationals-2026',
+      display_label: 'Nationals 2026',
+      room_key: roomKey,
+      created_at: new Date(),
+      archived_at: null,
     };
+    __testOverrides.getRoom = async (id) => (id === room.id ? room : null);
+    __testOverrides.getRoomByKey = async (k) => (k === roomKey ? room : null);
     __testOverrides.upsertTimerState = async () => {};
     __testOverrides.insertAuditEvent = async () => {};
     __testOverrides.loadTimerState = async () => null;
@@ -135,8 +130,8 @@ describe('WebSocket integration', () => {
     _resetRooms();
   });
 
-  it('rejects contestant upgrade on bad token', async () => {
-    const url = `${baseUrl}/contestant?room=nationals-2026&id=alice&token=wrong`;
+  it('rejects contestant upgrade on bad key', async () => {
+    const url = `${baseUrl}/contestant?key=wrong-key-01234567890&id=alice`;
     const ws = new WebSocket(url);
     const code = await new Promise<number>((resolve) => {
       ws.once('close', (c) => resolve(c));
@@ -157,7 +152,7 @@ describe('WebSocket integration', () => {
   });
 
   it('contestant receives initial STATE on connect', async () => {
-    const url = `${baseUrl}/contestant?room=nationals-2026&id=alice&token=${token}`;
+    const url = `${baseUrl}/contestant?key=${roomKey}&id=alice`;
     const ws = await open(url);
     try {
       const frame = await nextFrame(ws);
@@ -171,7 +166,7 @@ describe('WebSocket integration', () => {
   });
 
   it('PING yields a PONG with t1 >= t0 and t2 >= t1', async () => {
-    const url = `${baseUrl}/contestant?room=nationals-2026&id=alice&token=${token}`;
+    const url = `${baseUrl}/contestant?key=${roomKey}&id=alice`;
     const ws = await open(url);
     try {
       await nextFrame(ws); // discard STATE
@@ -188,7 +183,7 @@ describe('WebSocket integration', () => {
   });
 
   it('judge TIMER_SET broadcasts STATE running to contestants', async () => {
-    const contestantUrl = `${baseUrl}/contestant?room=nationals-2026&id=bob&token=${token}`;
+    const contestantUrl = `${baseUrl}/contestant?key=${roomKey}&id=bob`;
     const contestant = await open(contestantUrl);
 
     // Mint a judge ticket with admin access.
@@ -218,7 +213,7 @@ describe('WebSocket integration', () => {
   });
 
   it('contestant HELP_REQUEST broadcasts HELP_QUEUE to judges (not contestants)', async () => {
-    const contestantUrl = `${baseUrl}/contestant?room=nationals-2026&id=carol&token=${token}`;
+    const contestantUrl = `${baseUrl}/contestant?key=${roomKey}&id=carol`;
     const contestant = await open(contestantUrl);
 
     const ticket = ticketCache.mint({ sub: 'judge-1', email: 'j@x', groups: ['judges-admin'] });
@@ -262,8 +257,8 @@ describe('WebSocket integration', () => {
     // HELP_ACKED frame so the overlay can clear `help_pending`. The
     // OTHER contestant in the room MUST NOT receive that frame —
     // HELP_ACKED is targeted, not a broadcast.
-    const erinUrl = `${baseUrl}/contestant?room=nationals-2026&id=erin&token=${token}`;
-    const frankUrl = `${baseUrl}/contestant?room=nationals-2026&id=frank&token=${token}`;
+    const erinUrl = `${baseUrl}/contestant?key=${roomKey}&id=erin`;
+    const frankUrl = `${baseUrl}/contestant?key=${roomKey}&id=frank`;
     const erin = await open(erinUrl);
     const frank = await open(frankUrl);
 

@@ -3,7 +3,7 @@
 Backend for the TCA Timer & Help-Call System described in
 [`../TCA_Timer_Design_Spec.docx.md`](../TCA_Timer_Design_Spec.docx.md) §11.
 
-**Runtime**: Node.js 22 · Fastify 4 · `ws` 8 · Postgres 15+ · jose · bcrypt · Twilio · AWS SES v2.
+**Runtime**: Node.js 22 · Fastify 4 · `ws` 8 · Postgres 15+ · jose · Twilio · AWS SES v2.
 
 ## Commands
 
@@ -22,7 +22,7 @@ npm run migrate   # run SQL files in src/db/migrations/ against $DATABASE_URL
 ### Wire protocol (§5)
 
 - `GET /judge?room=…&ticket=…` — WebSocket. Ticket-mint flow per §8.1: single-use, 30-second TTL, LRU-bounded.
-- `GET /contestant?room=…&id=…&token=…` — WebSocket. Room regex + lowercased-username regex + bcrypt token compare.
+- `GET /contestant?key=…&id=…` — WebSocket. Room-key regex + lowercased-username regex + direct `rooms.room_key` lookup. See "Contestant auth" below.
 - Frame handlers for every frame in §5.2 (`PING`/`PONG`, `STATE`, `HELP_QUEUE`, `ERROR`, all `TIMER_*`, `HELP_ACK`, `HELP_REQUEST`, `HELP_CANCEL`). `STATE` frames carry `connectedContestants` (for the SPA, §10.4) and `dbDegraded` (§11.5).
 - Upgrades rejected with `1008` (or HTTP 429 at the router) before handshake completes when room/ticket/token are wrong or when the per-source-IP or per-room connection cap is reached.
 
@@ -61,14 +61,22 @@ npm run migrate   # run SQL files in src/db/migrations/ against $DATABASE_URL
 Implemented in `src/routes/`:
 
 - `POST /api/judge/ticket`, `GET /api/judge/rooms`, `GET /api/judge/log`, `GET /api/judge/log.csv`, `GET /api/judge/prefs`, `PUT /api/judge/prefs`, `POST /api/judge/prefs/verify-phone`, `POST /api/judge/prefs/verify-email`.
-- `POST /api/admin/rooms`, `POST /api/admin/rooms/:id/rotate-token` — gated on the `judges-admin` group; returns the freshly-generated room token once.
+- `POST /api/admin/rooms`, `POST /api/admin/rooms/:id/rotate-key` — gated on the `judges-admin` group; returns the freshly-generated `room_key`. Because the key is stored plaintext (§8.2), admins can also read it back from the `rooms` table without rotating.
 - `POST /api/webhooks/twilio` (HMAC validation), `POST /api/webhooks/ses` (SNS signature validation; auto-confirms `SubscriptionConfirmation`; routes bounces/complaints to `email_status='opted_out'`).
 - `GET /healthz` reports DB state and room count.
 
 ### Authentication (§8)
 
-- Cloudflare Access JWT verification via `jose` with JWKS caching for 1 hour; extracts `sub`, `email`, `groups`; `judgeRoomAccess` maps groups to room IDs.
-- Contestant: bcrypt(12) hashed room tokens; constant-time compare.
+- Server-mediated OIDC login (Authorization Code + PKCE) via
+  `openid-client`. Identity is persisted in an encrypted, signed
+  `tca_sess` cookie (AES-256-GCM, key derived via HKDF from
+  `SESSION_SECRET`). 24-hour sliding TTL with 1-hour renewal. Single
+  provider per deployment — Cloudflare Access (with an OIDC SaaS app),
+  Google, Microsoft, Okta, Auth0, etc. all work behind the same env-driven
+  config. Group membership comes from `OIDC_GROUPS_CLAIM` (default
+  `groups`) plus `OIDC_ADMIN_EMAILS` allowlist; `judgeRoomAccess` then
+  maps `judges-admin` / `judges-<roomId>` to authorized rooms.
+- Contestant: plaintext room keys stored directly in `rooms.room_key` and matched via a unique-index lookup on the `/contestant?key=…` upgrade. The only capability a leaked key grants is "connect an overlay and possibly trigger an extra help page", which isn't worth the overhead of a public-id + private-token pair.
 
 ### Background jobs
 
@@ -81,8 +89,10 @@ Implemented in `src/routes/`:
 src/
   index.ts                    entry point — Fastify + ws wiring, background jobs
   auth/
-    cf-jwt.ts                 CF Access JWT + ticket LRU (§8.1)
-    room-token.ts             bcrypt hash + regexes (§8.2)
+    identity.ts               JudgeIdentity + group/role mapping + ticket LRU (§8.1)
+    oidc.ts                   OIDC client (discovery, code-flow, claim → identity)
+    session.ts                Encrypted session cookie (AES-256-GCM)
+    identifiers.ts            room / contestant / room-key regexes (§3.1, §4.1, §8.2)
   clock.ts                    clock-drift sampler (§11.6)
   db/
     dal.ts                    Postgres DAL + retry ring buffer (§11.5)
@@ -101,6 +111,7 @@ src/
   rooms.ts                    in-memory RoomState + broadcasts (§11.5)
   routes/
     admin.ts                  POST /api/admin/rooms*
+    auth.ts                   /api/auth/{login,callback,logout,me}
     judge.ts                  /api/judge/*
     webhooks.ts               Twilio + SES webhooks
   timer.ts                    timer state machine (§6.5)
@@ -113,5 +124,24 @@ src/
 
 See `.env.example`. All are required in production; the `TWILIO_*` and
 `AWS_*` / `SES_*` groups may be omitted to disable SMS / email,
-respectively. `CF_ACCESS_*` may be omitted in local dev; all `/api/judge/*`
-and `/api/admin/*` routes will respond `401 missing_jwt`.
+respectively.
+
+Auth-related vars:
+
+| Var                   | Required                | Notes |
+| --------------------- | ----------------------- | ----- |
+| `SESSION_SECRET`      | yes (when no bypass)    | ≥32 chars; encryption + integrity for the session cookie |
+| `OIDC_ISSUER`         | yes (when no bypass)    | e.g. `https://<team>.cloudflareaccess.com`, `https://accounts.google.com` |
+| `OIDC_CLIENT_ID`      | yes (when no bypass)    | OIDC client id from the IdP |
+| `OIDC_CLIENT_SECRET`  | typically yes           | confidential client secret; empty string for public clients |
+| `OIDC_REDIRECT_URI`   | yes (when no bypass)    | absolute URL of `/api/auth/callback` as seen by the user agent |
+| `OIDC_SCOPES`         | no                      | default `openid profile email` |
+| `OIDC_GROUPS_CLAIM`   | no                      | ID-token claim that carries groups; default `groups` |
+| `OIDC_ADMIN_EMAILS`   | no                      | comma-separated email allowlist promoted to `judges-admin` |
+| `OIDC_ALLOW_ALL_ROOMS`| no                      | `1`/`true`: every authenticated user becomes admin (single-tenant convenience) |
+| `DEV_AUTH_BYPASS`     | dev only                | `1`/`true`: skip OIDC, synthesize a dev judge identity. Hard-disabled when `NODE_ENV=production`. |
+
+When OIDC is unconfigured (and the dev bypass isn't set), every
+`/api/judge/*` and `/api/admin/*` route responds `401 no_session` with
+a `login` hint pointing at `/api/auth/login`; the SPA's fetch wrapper
+then navigates the browser to that URL to start the IdP redirect.

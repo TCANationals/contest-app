@@ -23,10 +23,9 @@
     "@fastify/formbody": "^7.4.0",
     "@fastify/websocket": "^10.0.1",
     "@tca-timer/shared": "file:../shared",
-    "bcrypt": "^6.0.0",
     "fastify": "^4.28.1",
-    "jose": "^6.2.3",
     "node-pg-migrate": "^8.0.4",
+    "openid-client": "^5.7.1",
     "pg": "^8.20.0",
     "sns-validator": "^0.3.5",
     "twilio": "^6.0.0",
@@ -34,7 +33,6 @@
     "zod": "^4.4.1"
   },
   "devDependencies": {
-    "@types/bcrypt": "^6.0.0",
     "@types/node": "^22.7.4",
     "@types/pg": "^8.20.0",
     "@types/sns-validator": "^0.3.3",

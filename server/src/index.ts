@@ -9,6 +9,7 @@ import { registerJudgeWs } from './ws/judge.js';
 import { registerContestantWs } from './ws/contestant.js';
 import { registerJudgeRoutes } from './routes/judge.js';
 import { registerAdminRoutes } from './routes/admin.js';
+import { registerAuthRoutes } from './routes/auth.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { pingDb, hasDatabase, closePool } from './db/pool.js';
 import { listActiveRooms } from './db/dal.js';
@@ -52,6 +53,7 @@ export async function buildServer() {
     };
   });
 
+  registerAuthRoutes(app);
   registerJudgeRoutes(app);
   registerAdminRoutes(app);
   registerWebhookRoutes(app);

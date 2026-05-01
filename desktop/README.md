@@ -36,21 +36,27 @@ Cargo.toml           Rust workspace covering src-tauri, ipc-proto, and ctl.
 
 ## Configuration (§9.4)
 
-The overlay resolves `room`, `roomToken`, and `serverHost` at launch from
-the first non-empty source per key, in priority order:
+The overlay resolves `roomKey` and `serverHost` at launch from the first
+non-empty source per key, in priority order:
 
-1. Command-line flags: `--room <id>`, `--room-token <token>`, `--server <host>`.
-2. Windows registry: `HKLM\Software\TCANationals\Timer\Room`, `\RoomToken`, `\Server` (REG_SZ).
+1. Command-line flags: `--room-key <key>`, `--server <host>`.
+2. Windows registry: `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server` (REG_SZ).
 3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
    `/Library/Application Support/TCATimer/config.json` on macOS, and
-   `/etc/tca-timer/config.json` on Linux. JSON keys: `room`, `roomToken`,
-   `server`.
-4. Environment variables: `TCA_TIMER_ROOM`, `TCA_TIMER_ROOM_TOKEN`, `TCA_TIMER_SERVER`.
+   `/etc/tca-timer/config.json` on Linux. JSON keys: `roomKey`, `server`.
+4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`.
 
 `serverHost` defaults to **`timer.tcanationals.com`** when no source supplies
-one. `room` and `roomToken` have no default — if either is missing, the
-overlay shows a red "Configuration error" banner listing each tried source
-and does NOT attempt to connect.
+one. `roomKey` has no default — if it is missing, the overlay shows a
+red "Configuration error" banner listing each tried source and does NOT
+attempt to connect.
+
+The room key is a plaintext high-entropy random string that identifies
+and authenticates a room in a single value — the server reads it
+directly from the `rooms.room_key` column on the contestant WebSocket
+upgrade. A leak at worst lets someone trigger an extra help page, so
+the overhead of the previous public-id + private-token pair wasn't
+worth keeping.
 
 The CSP scopes `connect-src` to `wss://*.tcanationals.com` (plus loopback
 for local development), so any runtime-configured server host MUST live
