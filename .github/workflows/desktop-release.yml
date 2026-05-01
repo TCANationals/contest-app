@@ -38,11 +38,13 @@ jobs:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-          # Pin to ubuntu-22.04 so the produced AppImage / .deb link
+          # Pin to ubuntu-22.04 so the produced .deb / .rpm link
           # against an older glibc and stay compatible with a wider
           # range of distros than the rolling `ubuntu-latest` image.
+          # `--bundles deb,rpm` deliberately omits AppImage from the
+          # release output — the .deb / .rpm pair is what we ship.
           - platform: ubuntu-22.04
-            args: ''
+            args: '--bundles deb,rpm'
             rust-targets: ''
           - platform: windows-latest
             args: ''
@@ -82,16 +84,17 @@ jobs:
           rustup show
           rustup target add $(echo "${{ matrix.rust-targets }}" | tr ',' ' ')
 
-      # Tauri 2 on Linux pulls in GTK/WebKit system libs; AppImage build
-      # additionally needs `patchelf` and `file`. macOS and Windows pick
-      # up their WebView deps from the OS itself.
+      # Tauri 2 on Linux pulls in GTK/WebKit system libs; macOS and
+      # Windows pick up their WebView deps from the OS itself. We don't
+      # bundle AppImage on the release matrix (see `--bundles deb,rpm`
+      # above), so `patchelf` / `file` aren't required.
       - name: Install Tauri system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libsoup-3.0-dev patchelf file
+            librsvg2-dev libsoup-3.0-dev
 
       - uses: Swatinem/rust-cache@v2
         with:

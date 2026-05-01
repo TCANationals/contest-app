@@ -18,7 +18,7 @@
  * [1] https://v2.tauri.app/reference/environment-variables
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, copyFileSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -97,12 +97,12 @@ function main() {
   // `--target universal-apple-darwin`, Tauri builds the desktop crate
   // twice (once per arch) and the `tauri-build` build script checks for a
   // per-arch sidecar at `binaries/tca-timer-ctl-<arch>-apple-darwin`
-  // before each cargo build proceeds. Tauri itself `lipo`s the sidecars
-  // into the final bundle, so we just need to produce both per-arch
-  // binaries here — NOT a pre-fattened `tca-timer-ctl-universal-apple-darwin`,
-  // which Tauri doesn't look for.
+  // before each cargo build proceeds. Then the bundle step looks for a
+  // fat `binaries/tca-timer-ctl-universal-apple-darwin` to copy into the
+  // `.app`. Produce all three here so both phases succeed.
   if (triple === 'universal-apple-darwin') {
     const archTriples = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+    const builtBinaries = [];
     for (const archTriple of archTriples) {
       const builtBinary = buildOneTarget({
         triple: archTriple,
@@ -113,7 +113,14 @@ function main() {
       copyFileSync(builtBinary, archOutBinary);
       const archSize = statSync(archOutBinary).size;
       console.log(`[build-ctl] copied ${builtBinary} -> ${archOutBinary} (${archSize} bytes)`);
+      builtBinaries.push(builtBinary);
     }
+    if (existsSync(outBinary)) rmSync(outBinary);
+    execFileSync('lipo', ['-create', '-output', outBinary, ...builtBinaries], {
+      stdio: 'inherit',
+    });
+    const universalSize = statSync(outBinary).size;
+    console.log(`[build-ctl] lipo ${builtBinaries.join(' + ')} -> ${outBinary} (${universalSize} bytes)`);
     return;
   }
 
