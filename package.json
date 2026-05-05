@@ -1,0 +1,18 @@
+{
+  "name": "tca-timer",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Monorepo root for the TCA Timer (shared, spa, server, desktop). The workspaces field exists primarily so deploy targets that build a single package from the repo root (notably Railway/Railpack for the judge SPA) can resolve `@tca-timer/shared` via an npm-managed symlink instead of the per-subdir `file:../shared` link that only works when the sibling directory is physically present. Local per-subdir `npm ci` (used by `*/Dockerfile.dev` and `docker-compose.yml`) still works unchanged because each `package.json` keeps its own `file:../shared` reference and its own lockfile.",
+  "workspaces": [
+    "shared",
+    "spa",
+    "server",
+    "desktop"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build --workspace tca-timer-spa"
+  }
+}
