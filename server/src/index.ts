@@ -18,6 +18,7 @@ import { startClockDriftMonitor } from './clock.js';
 import { startRetentionJob } from './retention.js';
 import { startRetryDrain } from './db/retry-drain.js';
 import { IpConnectionLimiter } from './ratelimit.js';
+import { registerSpa } from './static.js';
 
 export async function buildServer() {
   const app = Fastify({
@@ -53,33 +54,40 @@ export async function buildServer() {
     };
   });
 
-  // Optional vanity redirect for the bare server origin. The server itself
-  // serves no human-facing pages, so when ROOT_REDIRECT_URL is set we bounce
-  // GET/HEAD `/` to e.g. the marketing site or judge SPA. Validated at boot
-  // so a typo'd env var fails fast instead of producing 502s in prod.
-  const rootRedirect = process.env.ROOT_REDIRECT_URL?.trim();
-  if (rootRedirect) {
-    try {
-      // eslint-disable-next-line no-new
-      new URL(rootRedirect);
-    } catch {
-      throw new Error(
-        `ROOT_REDIRECT_URL is not a valid absolute URL: ${rootRedirect}`,
-      );
-    }
-    app.route({
-      method: ['GET', 'HEAD'],
-      url: '/',
-      handler: async (_req, reply) => reply.redirect(rootRedirect, 302),
-    });
-  }
-
   registerAuthRoutes(app);
   registerJudgeRoutes(app);
   registerAdminRoutes(app);
   registerWebhookRoutes(app);
   registerJudgeWs(app);
   registerContestantWs(app);
+
+  // Static SPA hosting is registered last so the explicit API / WS
+  // routes win the route-matching race and the `GET *` wildcard only
+  // catches the leftovers (assets + client-side router paths). When
+  // the SPA bundle is not present (server-only deploys, dev `tsx`
+  // workflows, tests), we fall back to the optional vanity redirect
+  // for the bare origin.
+  const spaRoot = await registerSpa(app);
+  if (spaRoot) {
+    app.log.info({ spaRoot }, 'serving spa bundle from filesystem');
+  } else {
+    const rootRedirect = process.env.ROOT_REDIRECT_URL?.trim();
+    if (rootRedirect) {
+      try {
+        // eslint-disable-next-line no-new
+        new URL(rootRedirect);
+      } catch {
+        throw new Error(
+          `ROOT_REDIRECT_URL is not a valid absolute URL: ${rootRedirect}`,
+        );
+      }
+      app.route({
+        method: ['GET', 'HEAD'],
+        url: '/',
+        handler: async (_req, reply) => reply.redirect(rootRedirect, 302),
+      });
+    }
+  }
 
   // Background jobs. All three are no-ops when there's nothing to do, so
   // they're safe to start even in tests. Critically, we own the stop

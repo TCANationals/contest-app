@@ -70,8 +70,42 @@ compose stack and is run from its own directory. See
 below for the launch command.
 
 The compose file is intentionally dev-only — bind mounts, watcher
-processes, and a permissive Postgres password. Production server
-deployment continues to go through Railway (`server/railway.json`).
+processes, and a permissive Postgres password. Production deployment
+continues to go through Railway (see [Production deployment](#production-deployment)
+below).
+
+## Production deployment
+
+The judge SPA and the Fastify server ship as a **single Railway
+service** built from the repo root via [`railway.json`](./railway.json):
+
+```jsonc
+{
+  "build":  { "builder": "NIXPACKS", "buildCommand": "npm run build"  },
+  "deploy": { "startCommand": "npm run start", "healthcheckPath": "/healthz" }
+}
+```
+
+- `npm run build` (root) builds the SPA into `spa/dist/` and compiles
+  the server to `server/dist/` (`tsc`).
+- `npm run start` (root) runs `node server/dist/index.js` via the
+  `tca-timer-server` workspace.
+- At boot the server registers [`@fastify/static`](https://github.com/fastify/fastify-static)
+  on the same Fastify instance that serves `/api/*`, `/judge`, and
+  `/contestant`. See [`server/src/static.ts`](./server/src/static.ts):
+  the SPA is served from `spa/dist/` (override with `SPA_DIST_DIR`),
+  hashed `/assets/*` files get a 1-year immutable cache header, and any
+  unmatched non-API GET falls back to `index.html` so React Router
+  client-side routes work on direct hits / hard reloads.
+
+Because the SPA and the API share an origin, every relative URL the
+SPA emits (`/api/...`, `/healthz`, the WS handshakes) hits the same
+service without CORS — and the existing `trustProxy: true` Fastify
+config keeps real client IPs intact behind Railway's edge.
+
+If you need the server-only behavior (no SPA bundle present), the
+hosting code self-disables when `spa/dist/` is missing and the
+optional `ROOT_REDIRECT_URL` vanity redirect re-engages.
 
 ### Seeded dev room
 

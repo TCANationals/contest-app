@@ -21,6 +21,7 @@
     "@aws-sdk/client-sesv2": "^3.1039.0",
     "@fastify/cookie": "^9.4.0",
     "@fastify/formbody": "^7.4.0",
+    "@fastify/static": "^7.0.4",
     "@fastify/websocket": "^10.0.1",
     "@tca-timer/shared": "file:../shared",
     "fastify": "^4.28.1",
