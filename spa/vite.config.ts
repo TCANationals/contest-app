@@ -32,10 +32,31 @@ export default defineConfig(({ mode }) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,svg,ico,png,webmanifest}'],
           navigateFallback: '/index.html',
+          // Server-owned paths must reach Fastify without the SW
+          // rewriting them to the SPA shell. Without this, a top-level
+          // navigation to `/api/auth/login` (the OIDC entry point in
+          // `spa/src/api/client.ts`) gets satisfied with `index.html`,
+          // React Router's catch-all bounces to `/`, and the OIDC
+          // round-trip never starts. The denylist is also why we keep
+          // these prefixes in sync with `server/src/static.ts`.
+          navigateFallbackDenylist: [
+            /^\/api(\/|$)/,
+            /^\/healthz(\/|$)/,
+            /^\/judge(\/|$)/,
+            /^\/contestant(\/|$)/,
+          ],
           // SPA shell: keep recent state accessible while offline (§10.3).
           runtimeCaching: [
             {
-              urlPattern: ({ request }) => request.destination === 'document',
+              // Same exclusion as above: the document NetworkFirst
+              // handler runs *before* the navigation fallback, and a
+              // 302 from `/api/auth/*` would come back as
+              // `Response.redirected === true`, which browsers reject
+              // for top-level navigations. Skipping these URLs keeps
+              // the request out of the SW entirely.
+              urlPattern: ({ request, url }) =>
+                request.destination === 'document' &&
+                !/^\/(api|healthz|judge|contestant)(\/|$)/.test(url.pathname),
               handler: 'NetworkFirst',
               options: { cacheName: 'tca-html' },
             },
