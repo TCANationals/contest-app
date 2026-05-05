@@ -53,6 +53,27 @@ export async function buildServer() {
     };
   });
 
+  // Optional vanity redirect for the bare server origin. The server itself
+  // serves no human-facing pages, so when ROOT_REDIRECT_URL is set we bounce
+  // GET/HEAD `/` to e.g. the marketing site or judge SPA. Validated at boot
+  // so a typo'd env var fails fast instead of producing 502s in prod.
+  const rootRedirect = process.env.ROOT_REDIRECT_URL?.trim();
+  if (rootRedirect) {
+    try {
+      // eslint-disable-next-line no-new
+      new URL(rootRedirect);
+    } catch {
+      throw new Error(
+        `ROOT_REDIRECT_URL is not a valid absolute URL: ${rootRedirect}`,
+      );
+    }
+    app.route({
+      method: ['GET', 'HEAD'],
+      url: '/',
+      handler: async (_req, reply) => reply.redirect(rootRedirect, 302),
+    });
+  }
+
   registerAuthRoutes(app);
   registerJudgeRoutes(app);
   registerAdminRoutes(app);
