@@ -13,3 +13,20 @@ path = "src/main.rs"
 [dependencies]
 tca-timer-ipc-proto = { path = "../ipc-proto" }
 interprocess = { workspace = true }
+
+# Windows-only deps:
+#
+#   * windows-sys: `AttachConsole(ATTACH_PARENT_PROCESS)` + `SetStdHandle`
+#     so a GUI-subsystem build can still write to the parent shell's
+#     stdout/stderr when invoked from cmd/PowerShell. The 0.61 series is
+#     what the rest of the workspace already pulls in transitively (see
+#     desktop/Cargo.lock), so adding it here doesn't introduce a second
+#     copy.
+#
+#   * tauri-winrt-notification: WinRT toast notifications for the
+#     "no parent console" path (shortcut / Explorer launch). Maintained
+#     by the Tauri team and depends on `windows ^0.61`, matching the
+#     transitive copy that `tauri` itself pulls into the workspace.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+tauri-winrt-notification = "0.7"
