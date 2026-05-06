@@ -113,6 +113,41 @@ jobs:
         working-directory: desktop
         run: npm ci || npm install
 
+      # Workaround for npm/cli#4828: `package-lock.json` is generated on
+      # the maintainer's macOS box, and `npm ci` on any *other* platform
+      # (Windows runners, Linux runners, and even macOS if the lockfile
+      # was last touched on a different arch) silently skips the
+      # platform-gated optional dependency that ships the Tauri CLI's
+      # native `.node` binding. The CLI then crashes at runtime with
+      # `Cannot find module '@tauri-apps/cli-<plat>-<arch>-<variant>'`
+      # before doing any work. Re-resolve the binding for *this* runner
+      # explicitly, pinned to the same version as the meta package so
+      # the install is deterministic and `--no-save` keeps the lockfile
+      # untouched. We compute the package name in Node so we don't have
+      # to maintain a per-matrix mapping in YAML.
+      - name: Workaround npm/cli#4828 — ensure Tauri CLI native binding
+        working-directory: desktop
+        shell: bash
+        run: |
+          version=$(node -p "require('@tauri-apps/cli/package.json').version")
+          binding=$(node -e "
+            const map = {
+              'darwin-arm64': 'darwin-arm64',
+              'darwin-x64': 'darwin-x64',
+              'linux-x64': 'linux-x64-gnu',
+              'linux-arm64': 'linux-arm64-gnu',
+              'win32-x64': 'win32-x64-msvc',
+              'win32-arm64': 'win32-arm64-msvc',
+              'win32-ia32': 'win32-ia32-msvc',
+            };
+            const key = process.platform + '-' + process.arch;
+            const suffix = map[key];
+            if (!suffix) { console.error('Unknown runner platform: ' + key); process.exit(1); }
+            process.stdout.write('@tauri-apps/cli-' + suffix);
+          ")
+          echo "Forcing install of ${binding}@${version}"
+          npm install --no-save "${binding}@${version}"
+
       - name: Build & publish Tauri bundles
         uses: tauri-apps/tauri-action@v0
         env:
