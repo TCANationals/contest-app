@@ -316,7 +316,7 @@ export function Overlay() {
       <span
         data-testid="countdown"
         style={{
-          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          fontFamily: 'Roboto Mono, ui-monospace, monospace',
           fontSize: '48px',
           fontWeight: 700,
           color: style.color,
