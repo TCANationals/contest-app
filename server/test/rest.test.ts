@@ -1,8 +1,9 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildServer } from '../src/index.js';
 import { encodeSession, newSessionPayload } from '../src/auth/session.js';
+import { __testOverrides, type RoomRow } from '../src/db/dal.js';
 
 describe('REST endpoints without auth', () => {
   let app: Awaited<ReturnType<typeof buildServer>>;
@@ -141,5 +142,161 @@ describe('OIDC callback preconditions', () => {
     assert.equal(res.statusCode, 503);
     const body = res.json() as { error: string };
     assert.equal(body.error, 'session_secret_missing');
+  });
+});
+
+describe('POST /api/admin/rooms', () => {
+  let app: Awaited<ReturnType<typeof buildServer>>;
+
+  // Stand-in for the `rooms` table. The DAL's `__testOverrides` lets
+  // us swap out `getRoom` / `insertRoom` without touching Postgres,
+  // and we use a Map so the duplicate-id case becomes a single line:
+  // "if rooms.has(id) → 409".
+  const rooms = new Map<string, RoomRow>();
+  const auditEvents: Array<{ eventType: string; room: string }> = [];
+
+  function adminCookie(): string {
+    return encodeSession(
+      newSessionPayload({
+        sub: 'judge-admin',
+        email: 'admin@example.com',
+        groups: ['judges-admin'],
+      }),
+    );
+  }
+
+  function judgeCookie(): string {
+    return encodeSession(
+      newSessionPayload({
+        sub: 'judge-only',
+        email: 'judge@example.com',
+        // Room-scoped, *not* admin. The route should answer 403.
+        groups: ['judges-stage-1'],
+      }),
+    );
+  }
+
+  before(async () => {
+    process.env.SESSION_SECRET = 'test-secret-test-secret-test-secret-32+';
+    app = await buildServer();
+  });
+
+  after(async () => {
+    await app.close();
+    for (const k of Object.keys(__testOverrides)) {
+      delete (__testOverrides as Record<string, unknown>)[k];
+    }
+  });
+
+  beforeEach(() => {
+    rooms.clear();
+    auditEvents.length = 0;
+    __testOverrides.getRoom = async (id) => rooms.get(id) ?? null;
+    __testOverrides.insertRoom = async (id, displayLabel, roomKey) => {
+      rooms.set(id, {
+        id,
+        display_label: displayLabel,
+        room_key: roomKey,
+        created_at: new Date(),
+        archived_at: null,
+      });
+    };
+    __testOverrides.insertAuditEvent = async (ev) => {
+      auditEvents.push({ eventType: ev.eventType, room: ev.room });
+    };
+  });
+
+  afterEach(() => {
+    delete __testOverrides.getRoom;
+    delete __testOverrides.insertRoom;
+    delete __testOverrides.insertAuditEvent;
+  });
+
+  it('returns 201 with a fresh room_key for an admin caller', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+      payload: { id: 'practice-2026', display_label: 'Practice 2026' },
+    });
+    assert.equal(res.statusCode, 201);
+    const body = res.json() as {
+      id: string;
+      display_label: string;
+      room_key: string;
+    };
+    assert.equal(body.id, 'practice-2026');
+    assert.equal(body.display_label, 'Practice 2026');
+    // The key is `randomBytes(32).toString('base64url')` → 43 chars in
+    // the URL-safe base64 alphabet. Pin a sane lower bound so a
+    // regression that returned an empty / weak key would fail here.
+    assert.match(body.room_key, /^[A-Za-z0-9_-]{40,}$/);
+    assert.equal(rooms.size, 1);
+    assert.deepEqual(
+      auditEvents.map((e) => e.eventType),
+      ['ROOM_CREATED'],
+    );
+  });
+
+  it('returns 403 when the caller is authenticated but not in judges-admin', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms',
+      headers: { cookie: `tca_sess=${judgeCookie()}` },
+      payload: { id: 'practice-2026', display_label: 'Practice 2026' },
+    });
+    assert.equal(res.statusCode, 403);
+    const body = res.json() as { error: string };
+    assert.equal(body.error, 'not_admin');
+    assert.equal(rooms.size, 0);
+  });
+
+  it('returns 409 when the room id already exists', async () => {
+    rooms.set('practice-2026', {
+      id: 'practice-2026',
+      display_label: 'Practice 2026',
+      room_key: 'preexisting-key-for-test-only-1234567890ab',
+      created_at: new Date(),
+      archived_at: null,
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+      payload: { id: 'practice-2026', display_label: 'Some Other Label' },
+    });
+    assert.equal(res.statusCode, 409);
+    const body = res.json() as { error: string };
+    assert.equal(body.error, 'room_exists');
+  });
+
+  it('returns 400 for ids that violate the regex', async () => {
+    // Leading dash, uppercase, and too short — three different ways
+    // the regex rejects the value. We only assert the status code so
+    // the test doesn't have to enumerate the failure modes.
+    for (const badId of ['-leading-dash', 'Has-Capitals', 'a']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/admin/rooms',
+        headers: { cookie: `tca_sess=${adminCookie()}` },
+        payload: { id: badId, display_label: 'Test' },
+      });
+      assert.equal(res.statusCode, 400, `expected 400 for id ${JSON.stringify(badId)}`);
+      const body = res.json() as { error: string };
+      assert.equal(body.error, 'bad_room_id');
+    }
+    assert.equal(rooms.size, 0);
+  });
+
+  it('returns 400 when display_label is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+      payload: { id: 'practice-2026' },
+    });
+    assert.equal(res.statusCode, 400);
+    const body = res.json() as { error: string };
+    assert.equal(body.error, 'bad_display_label');
   });
 });

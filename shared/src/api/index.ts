@@ -118,6 +118,53 @@ export function roomFromWire(r: WireRoom): RoomListEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Admin: create room — POST /api/admin/rooms.
+//
+// Admin-only (`judges-admin`). The server mints the high-entropy
+// `room_key` server-side and returns it in the response so the
+// caller can hand it to a contestant overlay. The id regex below
+// matches `ROOM_ID_REGEX` in `server/src/auth/identifiers.ts` and the
+// DB-side CHECK constraint in `server/src/db/schema.sql`; keeping all
+// three in sync means a request that passes client validation also
+// passes the route handler and the database.
+// ---------------------------------------------------------------------------
+
+/**
+ * Same character set and length window as `ROOM_ID_REGEX`. Duplicated
+ * (rather than imported) so the SPA bundle doesn't pull in the
+ * server-only `auth/identifiers` module — the regex is the contract.
+ */
+export const ROOM_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
+
+export const WireCreateRoomRequestSchema = z.object({
+  id: z.string().regex(ROOM_ID_PATTERN),
+  display_label: z.string().min(1).max(200),
+});
+export type WireCreateRoomRequest = z.infer<typeof WireCreateRoomRequestSchema>;
+
+export const WireCreateRoomResponseSchema = z.object({
+  id: z.string(),
+  display_label: z.string(),
+  room_key: z.string(),
+});
+export type WireCreateRoomResponse = z.infer<typeof WireCreateRoomResponseSchema>;
+
+export interface CreateRoomResult {
+  id: string;
+  displayLabel: string;
+  roomKey: string;
+}
+
+export function createRoomFromWire(r: WireCreateRoomResponse): CreateRoomResult {
+  return { id: r.id, displayLabel: r.display_label, roomKey: r.room_key };
+}
+
+/** True when a `JudgeSession` belongs to the `judges-admin` group. */
+export function isAdmin(session: Pick<JudgeSession, 'access'>): boolean {
+  return session.access === 'all';
+}
+
+// ---------------------------------------------------------------------------
 // Audit log — GET /api/judge/log.
 // ---------------------------------------------------------------------------
 
