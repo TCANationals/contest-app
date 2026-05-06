@@ -97,19 +97,20 @@ export function RoomsPage() {
 
 /**
  * Best-effort label → id derivation. Lower-cases, swaps non-`[a-z0-9]`
- * runs for `-`, and trims leading/trailing dashes plus any leading
- * digit segment that would violate `ROOM_ID_PATTERN` (which requires a
- * leading alphanumeric — *not* a leading dash). The result might still
- * fail validation (e.g. labels of all whitespace), in which case the
- * user types the id by hand — the field never auto-overwrites a value
- * the admin has already touched.
+ * runs for `-`, truncates to the 63-char `ROOM_ID_PATTERN` cap, *then*
+ * trims edge dashes — order matters: trimming before the slice lets
+ * truncation reintroduce a trailing dash when the cut point lands
+ * mid-word (e.g. a 64-char label whose 63rd char is `-`). The result
+ * might still fail validation (e.g. labels of all whitespace), in
+ * which case the user types the id by hand — the field never auto-
+ * overwrites a value the admin has already touched.
  */
 function slugify(label: string): string {
   return label
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 63);
+    .slice(0, 63)
+    .replace(/^-+|-+$/g, '');
 }
 
 function CreateRoomCard() {
