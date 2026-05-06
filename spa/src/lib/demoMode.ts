@@ -280,6 +280,43 @@ export function installDemoMode(): void {
         })),
       });
     }
+    if (u.pathname === '/api/admin/rooms' && method === 'POST') {
+      // WireCreateRoomResponseSchema: { id, display_label, room_key }.
+      // Demo mode is fully offline, so we mirror the server's id +
+      // duplicate validation here. The auth check the real server
+      // performs (`judges-admin` group → 403) is intentionally
+      // skipped: demo mode synthesises an admin identity via
+      // `/api/auth/me`, so any caller in demo mode is admin by
+      // construction.
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { id?: string; display_label?: string })
+        : {};
+      const newId = body.id;
+      const newLabel = body.display_label;
+      if (typeof newId !== 'string' || !/^[a-z0-9][a-z0-9-]{1,62}$/.test(newId)) {
+        return jsonError(400, 'bad_room_id');
+      }
+      if (typeof newLabel !== 'string' || newLabel.length === 0) {
+        return jsonError(400, 'bad_display_label');
+      }
+      if (rooms[newId]) {
+        return jsonError(409, 'room_exists');
+      }
+      rooms[newId] = {
+        displayLabel: newLabel,
+        timer: makeIdleTimer(newId),
+        help: { room: newId, version: 1, entries: [] },
+      };
+      return jsonResponse(
+        {
+          id: newId,
+          display_label: newLabel,
+          // Synthetic but well-formed under `ROOM_KEY_REGEX`.
+          room_key: `demo-${newId}-${Math.random().toString(36).slice(2, 18)}`,
+        },
+        201,
+      );
+    }
     if (u.pathname === '/api/judge/log' && method === 'GET') {
       // WireAuditEnvelopeSchema: { entries: [...] }.
       const room = u.searchParams.get('room') ?? '';
@@ -372,11 +409,15 @@ export function installDemoMode(): void {
   (window as unknown as { WebSocket: typeof WebSocket }).WebSocket = Factory;
 }
 
-function jsonResponse(obj: unknown): Response {
+function jsonResponse(obj: unknown, status = 200): Response {
   return new Response(JSON.stringify(obj), {
-    status: 200,
+    status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function jsonError(status: number, error: string): Response {
+  return jsonResponse({ error }, status);
 }
 
 const prefsKey = 'tca-timer.demo.prefs';

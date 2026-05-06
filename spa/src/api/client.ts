@@ -31,15 +31,18 @@ import {
   WirePrefsEnvelopeSchema,
   WireVerifyPhoneSchema,
   WireVerifyEmailSchema,
+  WireCreateRoomResponseSchema,
   meFromWire,
   prefsFromWire,
   prefsPatchToWire,
   roomFromWire,
+  createRoomFromWire,
   type TicketResponse,
   type RoomListEntry,
   type JudgePrefs,
   type JudgeSession,
   type AuditLogEntry,
+  type CreateRoomResult,
 } from '@tca-timer/shared/api';
 
 export type {
@@ -48,6 +51,7 @@ export type {
   JudgePrefs,
   JudgeSession,
   AuditLogEntry,
+  CreateRoomResult,
   NotifyStatus,
 } from '@tca-timer/shared/api';
 
@@ -172,6 +176,24 @@ export const api = {
   listRooms: async (): Promise<RoomListEntry[]> => {
     const res = await req('/api/judge/rooms', WireRoomsEnvelopeSchema);
     return res.rooms.map(roomFromWire);
+  },
+
+  // Admin-only. The server enforces `judges-admin` and replies with
+  // 403 `not_admin` for plain judges; callers should gate the UI on
+  // `JudgeSession.access === 'all'` so the form is only shown when
+  // the call has a chance of succeeding.
+  createRoom: async (input: {
+    id: string;
+    displayLabel: string;
+  }): Promise<CreateRoomResult> => {
+    const res = await req('/api/admin/rooms', WireCreateRoomResponseSchema, {
+      method: 'POST',
+      body: JSON.stringify({
+        id: input.id,
+        display_label: input.displayLabel,
+      }),
+    });
+    return createRoomFromWire(res);
   },
 
   getLog: async (
