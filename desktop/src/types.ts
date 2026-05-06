@@ -22,6 +22,11 @@ export interface Preferences {
 export interface DesktopConfig {
   roomKey: string;
   serverHost: string;
+  // Windows-only: optional argv to invoke whenever the display
+  // configuration changes. Mirrors the BgInfo refresh hook from the
+  // legacy Electron app. Omitted from the payload when the config does
+  // not specify one (the Rust side serializes with skip_serializing_if).
+  displayChangeCommand?: string[];
 }
 
 export interface ConfigErrorPayload {

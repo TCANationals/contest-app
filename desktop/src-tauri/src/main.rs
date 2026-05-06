@@ -2,6 +2,7 @@
 
 mod app_state;
 mod config;
+mod display_watch;
 mod ipc_server;
 mod preferences;
 
@@ -345,20 +346,46 @@ fn main() {
                     .expect("current-corner mutex poisoned"),
             );
 
+            // Wire up the optional Windows-only display-change command
+            // (e.g. BgInfo refresh — see `display_watch` module docs and
+            // the legacy timer-desktop `index.js`). The watcher runs on
+            // every platform but only spawns the configured command on
+            // Windows. We start it before the `ScaleFactorChanged`
+            // handler so the handler can trigger an immediate re-check
+            // without waiting for the next 2 s poll.
+            let display_watcher = {
+                let argv = handle
+                    .state::<ManagedBootstrap>()
+                    .0
+                    .lock()
+                    .expect("bootstrap mutex poisoned")
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.display_change_command.clone());
+                argv.map(|argv| display_watch::start(handle.clone(), argv))
+            };
+
             // Re-pin to whichever corner the user most recently chose
             // whenever the monitor setup changes (§9.2 "Multi-monitor").
             // Reading from the shared `CurrentCorner` means a tray
             // reposition made after launch survives later DPI / display
-            // events.
+            // events. We also forward DPI events to the display watcher
+            // so the configured command fires on the same tick the OS
+            // tells us about a scale change, instead of up to 2 s
+            // later.
             if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
                 let handle_for_scale = handle.clone();
                 let corner_for_scale = current_corner.clone();
+                let watcher_for_scale = display_watcher.clone();
                 w.on_window_event(move |event| {
                     if matches!(event, WindowEvent::ScaleFactorChanged { .. }) {
                         let c = *corner_for_scale
                             .lock()
                             .expect("current-corner mutex poisoned");
                         apply_corner(&handle_for_scale, c);
+                        if let Some(w) = watcher_for_scale.as_ref() {
+                            w.trigger(&handle_for_scale);
+                        }
                     }
                 });
             }

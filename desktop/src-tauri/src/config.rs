@@ -36,6 +36,14 @@ pub const DEFAULT_SERVER_HOST: &str = "timer.tcanationals.com";
 pub struct DesktopConfig {
     pub room_key: String,
     pub server_host: String,
+    /// Optional command line to invoke whenever the Windows display
+    /// configuration changes (resolution, DPI, monitor add/remove). The
+    /// first element is the program; remaining elements are arguments.
+    /// Mirrors the old Electron app's BgInfo refresh hook
+    /// (https://github.com/TCANationals/timer-desktop/blob/main/index.js).
+    /// Honored only on Windows; ignored on other platforms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_change_command: Option<Vec<String>>,
 }
 
 impl DesktopConfig {
@@ -104,6 +112,7 @@ impl std::error::Error for ConfigError {}
 pub struct SourceValues {
     pub room_key: Option<String>,
     pub server: Option<String>,
+    pub display_change_command: Option<Vec<String>>,
 }
 
 impl SourceValues {
@@ -111,10 +120,25 @@ impl SourceValues {
         raw.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
     }
 
+    fn normalize_argv(raw: Option<Vec<String>>) -> Option<Vec<String>> {
+        let v = raw?;
+        // Trim each element and drop fully-empty trailing args, but
+        // preserve interior empty arguments — some programs accept "" as
+        // a positional placeholder. The leading element is the program
+        // path; if it's empty after trimming, the whole command is
+        // discarded.
+        let trimmed: Vec<String> = v.into_iter().map(|s| s.trim().to_owned()).collect();
+        match trimmed.first() {
+            Some(first) if !first.is_empty() => Some(trimmed),
+            _ => None,
+        }
+    }
+
     fn normalize(self) -> Self {
         Self {
             room_key: Self::nonempty(self.room_key),
             server: Self::nonempty(self.server),
+            display_change_command: Self::normalize_argv(self.display_change_command),
         }
     }
 
@@ -125,6 +149,9 @@ impl SourceValues {
         }
         if self.server.is_some() {
             v.push("server");
+        }
+        if self.display_change_command.is_some() {
+            v.push("displayChangeCommand");
         }
         v
     }
@@ -151,7 +178,9 @@ pub struct SourceEntry {
 impl SourceEntry {
     fn from_values(values: SourceValues) -> Self {
         let normalized = values.normalize();
-        let available = normalized.room_key.is_some() || normalized.server.is_some();
+        let available = normalized.room_key.is_some()
+            || normalized.server.is_some()
+            || normalized.display_change_command.is_some();
         Self {
             available,
             values: normalized,
@@ -189,6 +218,27 @@ fn split_flag(arg: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// `displayChangeCommand` accepts either a single string (program with no
+/// arguments) or an array of strings (program + args). The string form is
+/// shorthand for "this many-arg-free executable"; anything more elaborate
+/// must use the array form so we never have to invoke a shell to parse it
+/// — the OS handles a `Vec<String>` argv directly via `Command::args`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DisplayCommandShape {
+    Single(String),
+    Argv(Vec<String>),
+}
+
+impl DisplayCommandShape {
+    fn into_argv(self) -> Vec<String> {
+        match self {
+            Self::Single(s) => vec![s],
+            Self::Argv(v) => v,
+        }
+    }
+}
+
 /// Parse the JSON shape used for the config file. Unknown keys are
 /// ignored. Missing / unparseable yields an `available=false` entry with a
 /// diagnostic note.
@@ -198,11 +248,13 @@ pub fn parse_config_file(contents: &str) -> SourceEntry {
     struct FileShape {
         room_key: Option<String>,
         server: Option<String>,
+        display_change_command: Option<DisplayCommandShape>,
     }
     match serde_json::from_str::<FileShape>(contents) {
         Ok(shape) => SourceEntry::from_values(SourceValues {
             room_key: shape.room_key,
             server: shape.server,
+            display_change_command: shape.display_change_command.map(|c| c.into_argv()),
         }),
         Err(err) => SourceEntry {
             available: false,
@@ -297,6 +349,14 @@ fn read_registry_windows() -> std::io::Result<SourceValues> {
             Ok(SourceValues {
                 room_key: get("RoomKey"),
                 server: get("Server"),
+                // Registry storage is awkward for argv arrays, and the
+                // BgInfo refresh hook is naturally provisioned via the
+                // `%PROGRAMDATA%\TCATimer\config.json` file alongside
+                // the rest of the venue configuration. If we ever need
+                // a registry override, switch this to `REG_MULTI_SZ`
+                // via `key.get_raw_value("DisplayChangeCommand")` and
+                // decode the UTF-16 list into argv.
+                display_change_command: None,
             })
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(SourceValues::default()),
@@ -309,6 +369,7 @@ pub fn read_env() -> SourceEntry {
     SourceEntry::from_values(SourceValues {
         room_key: std::env::var("TCA_TIMER_ROOM_KEY").ok(),
         server: std::env::var("TCA_TIMER_SERVER").ok(),
+        display_change_command: None,
     })
 }
 
@@ -339,6 +400,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
 
     let mut room_key: Option<String> = None;
     let mut server: Option<String> = None;
+    let mut display_change_command: Option<Vec<String>> = None;
 
     let mut outcomes = Vec::with_capacity(ordered.len());
     for (name, entry) in ordered {
@@ -356,6 +418,11 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
         if server.is_none() {
             if let Some(v) = entry.values.server.clone() {
                 server = Some(v);
+            }
+        }
+        if display_change_command.is_none() {
+            if let Some(v) = entry.values.display_change_command.clone() {
+                display_change_command = Some(v);
             }
         }
     }
@@ -378,6 +445,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
         DesktopConfig {
             room_key: room_key.expect("roomKey present"),
             server_host: server.unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned()),
+            display_change_command,
         },
         report,
     ))
@@ -411,6 +479,7 @@ mod tests {
         SourceValues {
             room_key: opt(key),
             server: opt(server),
+            display_change_command: None,
         }
     }
 
@@ -567,6 +636,7 @@ mod tests {
         let cfg = DesktopConfig {
             room_key: "hunter2-key-0123456789".to_string(),
             server_host: "timer.tcanationals.com".to_string(),
+            display_change_command: None,
         };
         let url = cfg.contestant_ws_url("contestant-07");
         assert_eq!(
@@ -604,9 +674,92 @@ mod tests {
         let cfg = DesktopConfig {
             room_key: "a b".to_string(),
             server_host: "h".to_string(),
+            display_change_command: None,
         };
         let url = cfg.contestant_ws_url("user@domain");
         assert!(url.contains("id=user%40domain"));
         assert!(url.contains("key=a%20b"));
+    }
+
+    #[test]
+    fn parse_config_file_accepts_display_change_command_array() {
+        let entry = parse_config_file(
+            r#"{
+                "roomKey":"k1-0123456789abcdef",
+                "displayChangeCommand":[
+                    "C:\\ProgramData\\chocolatey\\lib\\sysinternals\\tools\\Bginfo64.exe",
+                    "C:\\Packer\\Config\\logon.bgi",
+                    "/timer:0",
+                    "/silent",
+                    "/nolicprompt"
+                ]
+            }"#,
+        );
+        let cmd = entry
+            .values
+            .display_change_command
+            .as_ref()
+            .expect("command parsed");
+        assert_eq!(cmd.len(), 5);
+        assert_eq!(cmd[0], "C:\\ProgramData\\chocolatey\\lib\\sysinternals\\tools\\Bginfo64.exe");
+        assert_eq!(cmd[4], "/nolicprompt");
+    }
+
+    #[test]
+    fn parse_config_file_accepts_display_change_command_string_shorthand() {
+        let entry = parse_config_file(
+            r#"{"roomKey":"k","displayChangeCommand":"C:\\path\\refresh.exe"}"#,
+        );
+        assert_eq!(
+            entry.values.display_change_command.as_deref(),
+            Some(&["C:\\path\\refresh.exe".to_string()][..]),
+        );
+    }
+
+    #[test]
+    fn display_change_command_with_empty_program_is_dropped() {
+        let entry = parse_config_file(
+            r#"{"roomKey":"k","displayChangeCommand":["   ", "ignored"]}"#,
+        );
+        assert!(entry.values.display_change_command.is_none());
+    }
+
+    #[test]
+    fn resolve_propagates_display_change_command_from_first_source_that_has_it() {
+        let sources = ConfigSources {
+            cli: SourceEntry::from_values(vals("k", "")),
+            registry: SourceEntry::default(),
+            file: SourceEntry::from_values(SourceValues {
+                room_key: None,
+                server: None,
+                display_change_command: Some(vec![
+                    "bginfo.exe".to_string(),
+                    "config.bgi".to_string(),
+                ]),
+            }),
+            env: SourceEntry::from_values(SourceValues {
+                room_key: None,
+                server: None,
+                display_change_command: Some(vec!["wrong.exe".to_string()]),
+            }),
+        };
+        let (cfg, report) = resolve(&sources).unwrap();
+        assert_eq!(
+            cfg.display_change_command.as_deref(),
+            Some(&["bginfo.exe".to_string(), "config.bgi".to_string()][..]),
+        );
+        // The file source should be reported as having found the field.
+        assert!(report.sources.iter().any(|s| s.source == "file"
+            && s.found.contains(&"displayChangeCommand")));
+    }
+
+    #[test]
+    fn resolve_omits_display_change_command_when_no_source_supplies_it() {
+        let sources = ConfigSources {
+            cli: SourceEntry::from_values(vals("k", "")),
+            ..Default::default()
+        };
+        let (cfg, _) = resolve(&sources).unwrap();
+        assert!(cfg.display_change_command.is_none());
     }
 }
