@@ -300,3 +300,211 @@ describe('POST /api/admin/rooms', () => {
     assert.equal(body.error, 'bad_display_label');
   });
 });
+
+describe('admin room archive lifecycle', () => {
+  let app: Awaited<ReturnType<typeof buildServer>>;
+
+  const rooms = new Map<string, RoomRow>();
+  const auditEvents: Array<{ eventType: string; room: string }> = [];
+
+  function adminCookie(): string {
+    return encodeSession(
+      newSessionPayload({
+        sub: 'judge-admin',
+        email: 'admin@example.com',
+        groups: ['judges-admin'],
+      }),
+    );
+  }
+
+  function judgeCookie(): string {
+    return encodeSession(
+      newSessionPayload({
+        sub: 'judge-only',
+        email: 'judge@example.com',
+        groups: ['judges-stage-1'],
+      }),
+    );
+  }
+
+  function seedRoom(
+    id: string,
+    overrides: Partial<RoomRow> = {},
+  ): RoomRow {
+    const row: RoomRow = {
+      id,
+      display_label: id,
+      room_key: 'k'.repeat(43),
+      created_at: new Date(),
+      archived_at: null,
+      ...overrides,
+    };
+    rooms.set(id, row);
+    return row;
+  }
+
+  before(async () => {
+    process.env.SESSION_SECRET = 'test-secret-test-secret-test-secret-32+';
+    app = await buildServer();
+  });
+
+  after(async () => {
+    await app.close();
+    for (const k of Object.keys(__testOverrides)) {
+      delete (__testOverrides as Record<string, unknown>)[k];
+    }
+  });
+
+  beforeEach(() => {
+    rooms.clear();
+    auditEvents.length = 0;
+    __testOverrides.getRoom = async (id) => rooms.get(id) ?? null;
+    __testOverrides.archiveRoom = async (id) => {
+      const r = rooms.get(id);
+      // Mirror the SQL guard: only stamp `archived_at` if it's null,
+      // so a redundant archive call doesn't overwrite the original
+      // timestamp.
+      if (r && r.archived_at == null) r.archived_at = new Date();
+    };
+    __testOverrides.unarchiveRoom = async (id) => {
+      const r = rooms.get(id);
+      if (r) r.archived_at = null;
+    };
+    __testOverrides.listAllRooms = async () =>
+      [...rooms.values()].sort((a, b) => {
+        // Active first (alphabetically), then archived.
+        if (!a.archived_at && b.archived_at) return -1;
+        if (a.archived_at && !b.archived_at) return 1;
+        if (!a.archived_at && !b.archived_at) return a.id.localeCompare(b.id);
+        return (
+          (b.archived_at?.getTime() ?? 0) - (a.archived_at?.getTime() ?? 0)
+        );
+      });
+    __testOverrides.insertAuditEvent = async (ev) => {
+      auditEvents.push({ eventType: ev.eventType, room: ev.room });
+    };
+  });
+
+  afterEach(() => {
+    delete __testOverrides.getRoom;
+    delete __testOverrides.archiveRoom;
+    delete __testOverrides.unarchiveRoom;
+    delete __testOverrides.listAllRooms;
+    delete __testOverrides.insertAuditEvent;
+  });
+
+  it('GET /api/admin/rooms includes archived rooms (admin)', async () => {
+    seedRoom('practice-2026');
+    seedRoom('finals-2025', { archived_at: new Date('2026-01-01T00:00:00Z') });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/rooms',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as {
+      rooms: Array<{ id: string; archived_at: string | null }>;
+    };
+    assert.equal(body.rooms.length, 2);
+    const byId = new Map(body.rooms.map((r) => [r.id, r]));
+    assert.equal(byId.get('practice-2026')?.archived_at, null);
+    assert.equal(
+      byId.get('finals-2025')?.archived_at,
+      '2026-01-01T00:00:00.000Z',
+    );
+  });
+
+  it('GET /api/admin/rooms returns 403 for plain judges', async () => {
+    seedRoom('practice-2026');
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/rooms',
+      headers: { cookie: `tca_sess=${judgeCookie()}` },
+    });
+    assert.equal(res.statusCode, 403);
+  });
+
+  it('POST /api/admin/rooms/:id/archive marks the room archived', async () => {
+    seedRoom('practice-2026');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms/practice-2026/archive',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as { id: string; archived_at: string | null };
+    assert.equal(body.id, 'practice-2026');
+    assert.ok(body.archived_at, 'archived_at must be populated');
+    assert.notEqual(rooms.get('practice-2026')?.archived_at, null);
+    assert.deepEqual(
+      auditEvents.map((e) => e.eventType),
+      ['ROOM_ARCHIVED'],
+    );
+  });
+
+  it('POST .../archive is idempotent and preserves the original timestamp', async () => {
+    const original = new Date('2026-01-01T12:00:00Z');
+    seedRoom('practice-2026', { archived_at: original });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms/practice-2026/archive',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as { archived_at: string };
+    assert.equal(body.archived_at, original.toISOString());
+    // Audit event should *not* fire on the no-op path — otherwise a
+    // double-tap pollutes the log with duplicate ROOM_ARCHIVED rows.
+    assert.equal(auditEvents.length, 0);
+  });
+
+  it('POST .../archive returns 404 for an unknown room', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms/does-not-exist/archive',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+    });
+    assert.equal(res.statusCode, 404);
+    const body = res.json() as { error: string };
+    assert.equal(body.error, 'unknown_room');
+  });
+
+  it('POST .../archive returns 403 for plain judges', async () => {
+    seedRoom('practice-2026');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms/practice-2026/archive',
+      headers: { cookie: `tca_sess=${judgeCookie()}` },
+    });
+    assert.equal(res.statusCode, 403);
+    assert.equal(rooms.get('practice-2026')?.archived_at, null);
+  });
+
+  it('POST .../unarchive clears archived_at', async () => {
+    seedRoom('finals-2025', { archived_at: new Date() });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms/finals-2025/unarchive',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as { id: string; archived_at: string | null };
+    assert.equal(body.archived_at, null);
+    assert.equal(rooms.get('finals-2025')?.archived_at, null);
+    assert.deepEqual(
+      auditEvents.map((e) => e.eventType),
+      ['ROOM_UNARCHIVED'],
+    );
+  });
+
+  it('POST .../unarchive on an active room is a no-op (200, no audit)', async () => {
+    seedRoom('practice-2026');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/rooms/practice-2026/unarchive',
+      headers: { cookie: `tca_sess=${adminCookie()}` },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(auditEvents.length, 0);
+  });
+});

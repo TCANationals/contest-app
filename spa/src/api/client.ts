@@ -32,6 +32,7 @@ import {
   WireVerifyPhoneSchema,
   WireVerifyEmailSchema,
   WireCreateRoomResponseSchema,
+  WireArchiveRoomResponseSchema,
   meFromWire,
   prefsFromWire,
   prefsPatchToWire,
@@ -178,6 +179,15 @@ export const api = {
     return res.rooms.map(roomFromWire);
   },
 
+  // Admin-only listing that includes archived rooms. Same envelope as
+  // the judge listing — the only difference is that `archived_at` is
+  // populated on rows where it isn't null. 403s for plain judges, so
+  // the SPA must gate the call on `isAdmin(session)`.
+  listAllRooms: async (): Promise<RoomListEntry[]> => {
+    const res = await req('/api/admin/rooms', WireRoomsEnvelopeSchema);
+    return res.rooms.map(roomFromWire);
+  },
+
   // Admin-only. The server enforces `judges-admin` and replies with
   // 403 `not_admin` for plain judges; callers should gate the UI on
   // `JudgeSession.access === 'all'` so the form is only shown when
@@ -194,6 +204,32 @@ export const api = {
       }),
     });
     return createRoomFromWire(res);
+  },
+
+  archiveRoom: async (id: string): Promise<{ id: string; archivedAt: string | null }> => {
+    const res = await req(
+      `/api/admin/rooms/${encodeURIComponent(id)}/archive`,
+      WireArchiveRoomResponseSchema,
+      { method: 'POST' },
+    );
+    return {
+      id: res.id,
+      archivedAt:
+        res.archived_at == null
+          ? null
+          : res.archived_at instanceof Date
+            ? res.archived_at.toISOString()
+            : res.archived_at,
+    };
+  },
+
+  unarchiveRoom: async (id: string): Promise<{ id: string; archivedAt: string | null }> => {
+    const res = await req(
+      `/api/admin/rooms/${encodeURIComponent(id)}/unarchive`,
+      WireArchiveRoomResponseSchema,
+      { method: 'POST' },
+    );
+    return { id: res.id, archivedAt: null };
   },
 
   getLog: async (

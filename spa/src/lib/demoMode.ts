@@ -18,6 +18,14 @@ interface DemoRoom {
   displayLabel: string;
   timer: TimerState;
   help: HelpQueue;
+  /**
+   * ISO timestamp when the room was archived, or `null` for active
+   * rooms. Mirrors the server's soft-delete semantics — archived
+   * rooms vanish from `/api/judge/rooms` and the active section of
+   * the SPA but stay available via `/api/admin/rooms` so an admin
+   * can unarchive them.
+   */
+  archivedAt: string | null;
 }
 
 const rooms: Record<string, DemoRoom> = {
@@ -25,11 +33,13 @@ const rooms: Record<string, DemoRoom> = {
     displayLabel: 'Demo Room',
     timer: makeIdleTimer('demo-room'),
     help: { room: 'demo-room', version: 1, entries: [] },
+    archivedAt: null,
   },
   'practice-2026': {
     displayLabel: 'Practice 2026',
     timer: makeIdleTimer('practice-2026'),
     help: { room: 'practice-2026', version: 1, entries: [] },
+    archivedAt: null,
   },
 };
 
@@ -69,6 +79,7 @@ export class DemoJudgeSocket {
         displayLabel: this.room,
         timer: makeIdleTimer(this.room),
         help: { room: this.room, version: 1, entries: [] },
+        archivedAt: null,
       };
     }
     setTimeout(() => this.open(), 50);
@@ -270,13 +281,40 @@ export function installDemoMode(): void {
       return jsonResponse({ ticket: 'demo-ticket', expiresInMs: 30_000 });
     }
     if (u.pathname === '/api/judge/rooms' && method === 'GET') {
-      // WireRoomsEnvelopeSchema: { rooms: [{ id, display_label, created_at? }] }.
+      // WireRoomsEnvelopeSchema: { rooms: [{ id, display_label, created_at?, archived_at? }] }.
+      // Mirror the server's behaviour: judge listing hides archived
+      // rooms entirely so only the admin endpoint can reach them.
       const since = Date.now() - 24 * 60 * 60 * 1000;
       return jsonResponse({
-        rooms: Object.entries(rooms).map(([id, r], i) => ({
+        rooms: Object.entries(rooms)
+          .filter(([, r]) => r.archivedAt == null)
+          .map(([id, r], i) => ({
+            id,
+            display_label: r.displayLabel,
+            created_at: new Date(since + i * 60_000).toISOString(),
+          })),
+      });
+    }
+    if (u.pathname === '/api/admin/rooms' && method === 'GET') {
+      // Admin-scoped listing: includes archived rooms, sorted active
+      // first then archived. Demo mode synthesises an admin identity
+      // so we don't bother with a 403 path here.
+      const since = Date.now() - 24 * 60 * 60 * 1000;
+      const entries = Object.entries(rooms);
+      const active = entries
+        .filter(([, r]) => r.archivedAt == null)
+        .sort(([a], [b]) => a.localeCompare(b));
+      const archived = entries
+        .filter(([, r]) => r.archivedAt != null)
+        .sort(([, a], [, b]) =>
+          (b.archivedAt ?? '').localeCompare(a.archivedAt ?? ''),
+        );
+      return jsonResponse({
+        rooms: [...active, ...archived].map(([id, r], i) => ({
           id,
           display_label: r.displayLabel,
           created_at: new Date(since + i * 60_000).toISOString(),
+          archived_at: r.archivedAt,
         })),
       });
     }
@@ -306,6 +344,7 @@ export function installDemoMode(): void {
         displayLabel: newLabel,
         timer: makeIdleTimer(newId),
         help: { room: newId, version: 1, entries: [] },
+        archivedAt: null,
       };
       return jsonResponse(
         {
@@ -316,6 +355,27 @@ export function installDemoMode(): void {
         },
         201,
       );
+    }
+    {
+      // /api/admin/rooms/:id/archive | unarchive — match either suffix
+      // and reuse a single block since the validation/lookup steps are
+      // identical. Anchored to `^/api/admin/rooms/[^/]+/(archive|unarchive)$`
+      // so only the two intended actions match.
+      const archiveMatch = u.pathname.match(
+        /^\/api\/admin\/rooms\/([^/]+)\/(archive|unarchive)$/,
+      );
+      if (archiveMatch && method === 'POST') {
+        const roomId = decodeURIComponent(archiveMatch[1] ?? '');
+        const action = archiveMatch[2] as 'archive' | 'unarchive';
+        const room = rooms[roomId];
+        if (!room) return jsonError(404, 'unknown_room');
+        if (action === 'archive') {
+          if (!room.archivedAt) room.archivedAt = new Date().toISOString();
+          return jsonResponse({ id: roomId, archived_at: room.archivedAt });
+        }
+        room.archivedAt = null;
+        return jsonResponse({ id: roomId, archived_at: null });
+      }
     }
     if (u.pathname === '/api/judge/log' && method === 'GET') {
       // WireAuditEnvelopeSchema: { entries: [...] }.

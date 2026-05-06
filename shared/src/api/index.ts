@@ -101,6 +101,12 @@ export const WireRoomSchema = z.object({
   // Postgres timestamps come through as ISO strings; tolerate Date too
   // in case the server ever emits an unserialized value.
   created_at: z.union([z.string(), z.date()]).optional(),
+  // Only the admin listing endpoint emits this; for `/api/judge/rooms`
+  // the server filters archived rooms out entirely, so the field
+  // stays unset there. Optional + nullable lets a single schema
+  // describe both shapes without making the judge listing carry a
+  // pointless `archived_at: null` for every row.
+  archived_at: z.union([z.string(), z.date()]).nullable().optional(),
 });
 export type WireRoom = z.infer<typeof WireRoomSchema>;
 
@@ -111,10 +117,23 @@ export const WireRoomsEnvelopeSchema = z.object({
 export interface RoomListEntry {
   id: string;
   displayLabel: string;
+  /**
+   * ISO timestamp when the room was archived, or `null` for active
+   * rooms. The `/api/judge/rooms` listing only returns active rooms so
+   * this is always `null` there; admin views fill it in for the
+   * archived section.
+   */
+  archivedAt: string | null;
 }
 
 export function roomFromWire(r: WireRoom): RoomListEntry {
-  return { id: r.id, displayLabel: r.display_label };
+  const archived =
+    r.archived_at == null
+      ? null
+      : r.archived_at instanceof Date
+        ? r.archived_at.toISOString()
+        : r.archived_at;
+  return { id: r.id, displayLabel: r.display_label, archivedAt: archived };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +182,21 @@ export function createRoomFromWire(r: WireCreateRoomResponse): CreateRoomResult 
 export function isAdmin(session: Pick<JudgeSession, 'access'>): boolean {
   return session.access === 'all';
 }
+
+// ---------------------------------------------------------------------------
+// Admin: archive / unarchive room — POST /api/admin/rooms/:id/{archive,unarchive}.
+//
+// Both endpoints are admin-only and idempotent on the server side. The
+// response only echoes the new archived state (rather than the full
+// room) because nothing else changes — the caller invalidates the
+// rooms query and reads the updated value from the next list.
+// ---------------------------------------------------------------------------
+
+export const WireArchiveRoomResponseSchema = z.object({
+  id: z.string(),
+  archived_at: z.union([z.string(), z.date()]).nullable(),
+});
+export type WireArchiveRoomResponse = z.infer<typeof WireArchiveRoomResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Audit log — GET /api/judge/log.

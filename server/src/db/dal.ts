@@ -31,6 +31,40 @@ async function _updateRoomKey(id: string, roomKey: string): Promise<void> {
   await pool.query(`UPDATE rooms SET room_key = $2 WHERE id = $1`, [id, roomKey]);
 }
 
+async function _archiveRoom(id: string): Promise<void> {
+  const pool = getPool();
+  // Idempotent on the application side: if the row is already archived
+  // we leave the original `archived_at` timestamp alone so the audit
+  // trail keeps pointing at the *first* archive event. The SQL below
+  // is what gives us that property — without the `IS NULL` guard a
+  // double-archive would silently overwrite the original timestamp.
+  await pool.query(
+    `UPDATE rooms SET archived_at = now() WHERE id = $1 AND archived_at IS NULL`,
+    [id],
+  );
+}
+
+async function _unarchiveRoom(id: string): Promise<void> {
+  const pool = getPool();
+  await pool.query(`UPDATE rooms SET archived_at = NULL WHERE id = $1`, [id]);
+}
+
+async function _listAllRooms(): Promise<RoomRow[]> {
+  if (!hasDatabase()) return [];
+  const pool = getPool();
+  // Active rooms first (alpha), then archived (most-recently-archived
+  // first) — matches how `RoomsPage` wants to render the two sections
+  // and keeps the SPA from having to do a second sort pass.
+  const res = await pool.query<RoomRow>(
+    `SELECT id, display_label, room_key, created_at, archived_at
+       FROM rooms
+       ORDER BY (archived_at IS NOT NULL) ASC,
+                CASE WHEN archived_at IS NULL THEN id END ASC,
+                archived_at DESC`,
+  );
+  return res.rows;
+}
+
 async function _getRoom(id: string): Promise<RoomRow | null> {
   if (!hasDatabase()) return null;
   const pool = getPool();
@@ -433,6 +467,9 @@ export interface DalOverrides {
   upsertJudgePrefs?: (row: JudgePrefsPatch) => Promise<void>;
   insertRoom?: (id: string, displayLabel: string, roomKey: string) => Promise<void>;
   updateRoomKey?: (id: string, roomKey: string) => Promise<void>;
+  archiveRoom?: (id: string) => Promise<void>;
+  unarchiveRoom?: (id: string) => Promise<void>;
+  listAllRooms?: () => Promise<RoomRow[]>;
 }
 
 export const __testOverrides: DalOverrides = {};
@@ -465,6 +502,15 @@ export function getRoomByKey(roomKey: string): Promise<RoomRow | null> {
 }
 export function listActiveRooms(): Promise<RoomRow[]> {
   return (__testOverrides.listActiveRooms ?? _listActiveRooms)();
+}
+export function listAllRooms(): Promise<RoomRow[]> {
+  return (__testOverrides.listAllRooms ?? _listAllRooms)();
+}
+export function archiveRoom(id: string): Promise<void> {
+  return (__testOverrides.archiveRoom ?? _archiveRoom)(id);
+}
+export function unarchiveRoom(id: string): Promise<void> {
+  return (__testOverrides.unarchiveRoom ?? _unarchiveRoom)(id);
 }
 export function getStationNumber(room: string, contestantId: string): Promise<number | null> {
   return (__testOverrides.getStationNumber ?? _getStationNumber)(room, contestantId);

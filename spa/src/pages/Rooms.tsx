@@ -2,17 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { isAdmin, ROOM_ID_PATTERN, type CreateRoomResult } from '@tca-timer/shared/api';
+import {
+  isAdmin,
+  ROOM_ID_PATTERN,
+  type CreateRoomResult,
+  type RoomListEntry,
+} from '@tca-timer/shared/api';
 
 import { ApiError, api } from '../api/client';
 import { sortByRecency } from '../lib/rooms';
 
 export function RoomsPage() {
-  const navigate = useNavigate();
-  const query = useQuery({
-    queryKey: ['rooms'],
-    queryFn: () => api.listRooms(),
-  });
   // Reuses the cached `['me']` entry populated by `AppLayout` so the
   // admin gate doesn't trigger a second `/api/auth/me` round-trip on
   // mount. `staleTime` matches AppLayout's so the cache hit ratio
@@ -23,9 +23,25 @@ export function RoomsPage() {
     staleTime: 60_000,
     retry: false,
   });
-
-  const ordered = useMemo(() => sortByRecency(query.data ?? []), [query.data]);
   const userIsAdmin = !!meQuery.data && isAdmin(meQuery.data);
+
+  // Admins read the full room list (including archived) from the
+  // admin endpoint so a single fetch powers both the "active" and
+  // "archived" sections. Non-admins can't hit `/api/admin/rooms`
+  // (they get a 403), so they stay on the judge endpoint, which
+  // already filters out archived rooms server-side.
+  const roomsQuery = useQuery({
+    queryKey: ['rooms', userIsAdmin ? 'all' : 'active'],
+    queryFn: () => (userIsAdmin ? api.listAllRooms() : api.listRooms()),
+    // Don't fire until we know whether to call the admin endpoint —
+    // otherwise non-admins would briefly hit /api/admin/rooms and 403
+    // before `meQuery` resolves.
+    enabled: meQuery.isSuccess || meQuery.isError,
+  });
+
+  const { active, archived } = useMemo(() => splitRooms(roomsQuery.data ?? []), [
+    roomsQuery.data,
+  ]);
 
   return (
     <section className="space-y-4">
@@ -38,61 +54,205 @@ export function RoomsPage() {
 
       {userIsAdmin && <CreateRoomCard />}
 
-      {query.isLoading ? (
+      {roomsQuery.isLoading ? (
         <p className="text-sm text-slate-500">Loading…</p>
-      ) : query.isError ? (
+      ) : roomsQuery.isError ? (
         <p className="text-sm text-red-600">
-          Failed to load rooms: {(query.error as Error).message}
+          Failed to load rooms: {(roomsQuery.error as Error).message}
         </p>
-      ) : ordered.length === 0 ? (
-        <p className="text-sm text-slate-500">You don&apos;t have access to any rooms.</p>
       ) : (
-        <ul className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
-          {ordered.map((room) => {
-            // The whole row navigates to /?room=<id>, but it must also host a
-            // separate "Projector ↗" link that opens in a new tab. A real
-            // <button> wrapping a <Link> (= <a>) would nest interactive
-            // content, which is invalid HTML and breaks screen readers — so
-            // we use a div[role=\"button\"] for the row surface and let the
-            // inner <Link> remain a top-level interactive element.
-            const goToRoom = () =>
-              navigate(`/?room=${encodeURIComponent(room.id)}`);
-            const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                goToRoom();
-              }
-            };
-            return (
-              <li key={room.id}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={goToRoom}
-                  onKeyDown={onKeyDown}
-                  className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-slate-50 min-h-[56px] cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2"
-                >
-                  <span className="flex-1">
-                    <span className="font-medium block">{room.displayLabel}</span>
-                    <span className="text-xs text-slate-500 font-mono">{room.id}</span>
-                  </span>
-                  <Link
-                    to={`/projector?room=${encodeURIComponent(room.id)}`}
-                    target="_blank"
-                    rel="noopener"
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-xs text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline"
-                  >
-                    Projector ↗
-                  </Link>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        <ActiveRoomsList rooms={active} userIsAdmin={userIsAdmin} />
       )}
+
+      {userIsAdmin && archived.length > 0 && <ArchivedRoomsSection rooms={archived} />}
     </section>
   );
+}
+
+/**
+ * Partition the listing into active vs archived. The admin endpoint
+ * orders active rooms first then archived (most-recently-archived
+ * first); we still re-sort `active` through `sortByRecency` because
+ * the MRU pass needs to run client-side.
+ */
+function splitRooms(rooms: RoomListEntry[]): {
+  active: RoomListEntry[];
+  archived: RoomListEntry[];
+} {
+  const active: RoomListEntry[] = [];
+  const archived: RoomListEntry[] = [];
+  for (const r of rooms) (r.archivedAt ? archived : active).push(r);
+  return { active: sortByRecency(active), archived };
+}
+
+function ActiveRoomsList({
+  rooms,
+  userIsAdmin,
+}: {
+  rooms: RoomListEntry[];
+  userIsAdmin: boolean;
+}) {
+  const navigate = useNavigate();
+
+  if (rooms.length === 0) {
+    return (
+      <p className="text-sm text-slate-500">
+        {userIsAdmin
+          ? 'No rooms yet. Use the form above to create your first one.'
+          : "You don't have access to any rooms."}
+      </p>
+    );
+  }
+
+  return (
+    <ul className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
+      {rooms.map((room) => {
+        // The whole row navigates to /?room=<id>, but it must also
+        // host a separate "Projector ↗" link that opens in a new tab
+        // (and an admin-only Archive button). A real <button>
+        // wrapping a <Link> (= <a>) would nest interactive content,
+        // which is invalid HTML and breaks screen readers — so we
+        // use a div[role=\"button\"] for the row surface and let the
+        // inner controls remain top-level interactive elements.
+        const goToRoom = () =>
+          navigate(`/?room=${encodeURIComponent(room.id)}`);
+        const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            goToRoom();
+          }
+        };
+        return (
+          <li key={room.id}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={goToRoom}
+              onKeyDown={onKeyDown}
+              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-slate-50 min-h-[56px] cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2"
+            >
+              <span className="flex-1">
+                <span className="font-medium block">{room.displayLabel}</span>
+                <span className="text-xs text-slate-500 font-mono">{room.id}</span>
+              </span>
+              <Link
+                to={`/projector?room=${encodeURIComponent(room.id)}`}
+                target="_blank"
+                rel="noopener"
+                onClick={(e) => e.stopPropagation()}
+                className="text-xs text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline"
+              >
+                Projector ↗
+              </Link>
+              {userIsAdmin && <ArchiveButton roomId={room.id} />}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ArchivedRoomsSection({ rooms }: { rooms: RoomListEntry[] }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <details
+      open={expanded}
+      onToggle={(e) => setExpanded((e.target as HTMLDetailsElement).open)}
+      className="bg-white rounded-xl border border-slate-200"
+    >
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700 flex items-center gap-2">
+        <span>Archived rooms</span>
+        <span className="text-xs text-slate-500 font-mono">{rooms.length}</span>
+      </summary>
+      <ul className="divide-y divide-slate-100 border-t border-slate-100">
+        {rooms.map((room) => (
+          <li
+            key={room.id}
+            className="px-4 py-3 flex items-center gap-3 min-h-[56px]"
+          >
+            <span className="flex-1">
+              <span className="block text-slate-700">{room.displayLabel}</span>
+              <span className="text-xs text-slate-500 font-mono">{room.id}</span>
+              {room.archivedAt && (
+                <span className="block text-xs text-slate-400">
+                  Archived {formatTimestamp(room.archivedAt)}
+                </span>
+              )}
+            </span>
+            <UnarchiveButton roomId={room.id} />
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function ArchiveButton({ roomId }: { roomId: string }) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (id: string) => api.archiveRoom(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['rooms'] });
+    },
+  });
+  return (
+    <button
+      type="button"
+      title="Archive room (hides from list; reversible)"
+      disabled={mutation.isPending}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (mutation.isPending) return;
+        mutation.mutate(roomId);
+      }}
+      className="text-xs text-slate-500 hover:text-red-700 underline-offset-2 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {mutation.isPending ? 'Archiving…' : 'Archive'}
+    </button>
+  );
+}
+
+function UnarchiveButton({ roomId }: { roomId: string }) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (id: string) => api.unarchiveRoom(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['rooms'] });
+    },
+  });
+  return (
+    <button
+      type="button"
+      disabled={mutation.isPending}
+      onClick={() => {
+        if (mutation.isPending) return;
+        mutation.mutate(roomId);
+      }}
+      className="text-xs rounded border border-slate-300 bg-white px-2 py-1 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {mutation.isPending ? 'Unarchiving…' : 'Unarchive'}
+    </button>
+  );
+}
+
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  // Locale-formatted but stable: date + short time, no seconds. Falls
+  // back to the raw ISO string if `toLocaleString` ever throws (it
+  // can on exotic locale/timezone combos in old Safari).
+  try {
+    return d.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
 }
 
 /**
