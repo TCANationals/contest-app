@@ -12,6 +12,14 @@ import {
 
 import { layoutForCorner } from './layout';
 import { overlayPaddingPx } from './overlayScreenInset';
+import {
+  ancillaryBandMinPx,
+  bannerMessageFontPx,
+  countdownFontSizePx,
+  countdownStrokePx,
+  overlayTextSizeFromPrefs,
+  pausedLabelFontPx,
+} from './overlayTextSize';
 import { shouldFlash } from './timer';
 import { buildContestantUrl } from './url';
 import type {
@@ -322,8 +330,9 @@ export function Overlay() {
   // Without this the 380×96 window centred its content, leaving the
   // digits floating ~80px+ inside whichever screen corner the window
   // was pinned to — which looks like a misaligned overlay.
+  const overlayTextSize = overlayTextSizeFromPrefs(prefs?.display.textSize);
   const cornerLayout = layoutForCorner(corner);
-  const overlayPadding = overlayPaddingPx(corner);
+  const overlayPadding = overlayPaddingPx(corner, overlayTextSize);
   // Bottom corners use flex-end so the last DOM child hugs the screen
   // edge — ancillary lines must appear *before* the countdown so they sit
   // above the digits. Top corners use flex-start; canonical order keeps
@@ -337,7 +346,7 @@ export function Overlay() {
   const showBanner = isRunning && Boolean(timer.message);
   // Single band for paused label + judge message (same chrome); reserve
   // height even when empty so the countdown does not shift.
-  const ANCILLARY_SLOT_MIN_PX = 20;
+  const ancillaryBandMin = ancillaryBandMinPx(overlayTextSize);
   const ancillaryRowJustify: 'flex-start' | 'flex-end' =
     corner === 'topLeft' || corner === 'bottomLeft'
       ? 'flex-start'
@@ -358,10 +367,10 @@ export function Overlay() {
       data-testid="countdown"
       style={{
         fontFamily: 'Roboto Mono, ui-monospace, monospace',
-        fontSize: '48px',
+        fontSize: `${countdownFontSizePx(overlayTextSize)}px`,
         fontWeight: 700,
         color: style.color,
-        WebkitTextStrokeWidth: 2,
+        WebkitTextStrokeWidth: countdownStrokePx(overlayTextSize),
         WebkitTextStrokeColor: outlineStrokeColor,
         opacity: digitOpacity,
         transition: countdownTransition,
@@ -378,7 +387,7 @@ export function Overlay() {
       data-testid="paused-slot"
       style={{
         ...ancillarySlotStyle,
-        minHeight: ANCILLARY_SLOT_MIN_PX,
+        minHeight: ancillaryBandMin,
       }}
     >
       {showPaused || showBanner ? (
@@ -400,7 +409,7 @@ export function Overlay() {
               data-testid="paused-pill"
               style={{
                 fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-                fontSize: 12,
+                fontSize: pausedLabelFontPx(overlayTextSize),
                 fontWeight: 700,
                 letterSpacing: 1,
                 color: '#fff',
@@ -415,7 +424,7 @@ export function Overlay() {
               data-testid="banner-message"
               style={{
                 fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-                fontSize: 11,
+                fontSize: bannerMessageFontPx(overlayTextSize),
                 fontWeight: 600,
                 color: '#fff',
                 lineHeight: 1.2,
@@ -479,7 +488,7 @@ function ConfigError({
     <div
       data-testid="config-error"
       style={{
-        ...overlayPaddingPx(corner),
+        ...overlayPaddingPx(corner, 'medium'),
         fontFamily: 'ui-sans-serif, system-ui, sans-serif',
         color: '#DC2626',
         fontSize: 14,

@@ -15,8 +15,11 @@ export interface Preferences {
   version: number;
   alarm: { enabled: boolean; volume: number };
   flash: { enabled: boolean; thresholdSeconds: number };
-  /** Overlay-only: §9.2 phase colors (green / amber / red). */
-  display: { statusColor: boolean };
+  /** Overlay-only presentation. */
+  display: {
+    statusColor: boolean;
+    textSize: 'small' | 'medium' | 'large';
+  };
   position: { corner: PositionCorner };
   hidden: boolean;
 }

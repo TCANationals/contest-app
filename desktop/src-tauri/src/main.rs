@@ -11,7 +11,8 @@ use std::sync::Arc;
 use app_state::{AppState, Effects};
 use config::{resolve, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
 use preferences::{
-    load_from_path, write_atomic, Corner, FlashPrefs, LoadAction, Preferences,
+    load_from_path, write_atomic, Corner, DisplayPrefs, FlashPrefs, LoadAction, Preferences,
+    TextSize,
 };
 use serde::Serialize;
 use std::sync::Mutex;
@@ -25,26 +26,74 @@ use tca_timer_ipc_server::Handler;
 const OVERLAY_LABEL: &str = "overlay";
 
 /// Gap between the overlay window and the **monitor work-area** edge, in
-/// **logical** pixels. Each value is multiplied by the monitor
-/// `scale_factor` in [`apply_corner`] (same convention as the former
-/// single `EDGE_MARGIN`).
+/// **logical** pixels. Values are multiplied by the monitor `scale_factor`
+/// in [`apply_corner`]. Three presets track [`preferences::TextSize`].
 ///
-/// Horizontal = inset from the **left** edge (`TopLeft`, `BottomLeft`) or
-/// from the **right** edge (`TopRight`, `BottomRight`).  
-/// Vertical = inset from the **top** edge (`TopLeft`, `TopRight`) or from
-/// the **bottom** edge (`BottomLeft`, `BottomRight`).
+/// Horizontal = inset from the **left** (`TopLeft`, `BottomLeft`) or
+/// **right** (`TopRight`, `BottomRight`).  
+/// Vertical = inset from the **top** (`TopLeft`, `TopRight`) or **bottom**
+/// (`BottomLeft`, `BottomRight`).
 ///
-/// Keep numeric defaults in sync with `OVERLAY_SCREEN_INSET` in the frontend
-/// (`desktop/src/overlayScreenInset.ts`).
+/// Keep each tier in sync with `OVERLAY_SCREEN_INSET_*` in
+/// `desktop/src/overlayScreenInset.ts`.
 mod overlay_screen_inset {
-    pub const TOP_LEFT_X: f64 = 15.0;
-    pub const TOP_LEFT_Y: f64 = 5.0;
-    pub const TOP_RIGHT_X: f64 = 15.0;
-    pub const TOP_RIGHT_Y: f64 = 5.0;
-    pub const BOTTOM_LEFT_X: f64 = 15.0;
-    pub const BOTTOM_LEFT_Y: f64 = 35.0;
-    pub const BOTTOM_RIGHT_X: f64 = 15.0;
-    pub const BOTTOM_RIGHT_Y: f64 = 35.0;
+    use crate::preferences::TextSize;
+
+    #[derive(Clone, Copy)]
+    pub struct CornerInsets {
+        pub top_left_x: f64,
+        pub top_left_y: f64,
+        pub top_right_x: f64,
+        pub top_right_y: f64,
+        pub bottom_left_x: f64,
+        pub bottom_left_y: f64,
+        pub bottom_right_x: f64,
+        pub bottom_right_y: f64,
+    }
+
+    /// Smaller typography → slightly tighter margins.
+    const SMALL: CornerInsets = CornerInsets {
+        top_left_x: 12.0,
+        top_left_y: 4.0,
+        top_right_x: 12.0,
+        top_right_y: 4.0,
+        bottom_left_x: 12.0,
+        bottom_left_y: 16.0,
+        bottom_right_x: 12.0,
+        bottom_right_y: 16.0,
+    };
+
+    /// Default tray tier — historical baseline.
+    const MEDIUM: CornerInsets = CornerInsets {
+        top_left_x: 15.0,
+        top_left_y: 5.0,
+        top_right_x: 15.0,
+        top_right_y: 5.0,
+        bottom_left_x: 15.0,
+        bottom_left_y: 35.0,
+        bottom_right_x: 15.0,
+        bottom_right_y: 35.0,
+    };
+
+    /// Larger typography → more clearance from bezels / taskbar bands.
+    const LARGE: CornerInsets = CornerInsets {
+        top_left_x: 15.0,
+        top_left_y: 12.0,
+        top_right_x: 15.0,
+        top_right_y: 0.0,
+        bottom_left_x: 15.0,
+        bottom_left_y: 58.0,
+        bottom_right_x: 15.0,
+        bottom_right_y: 58.0,
+    };
+
+    pub fn for_text_size(size: TextSize) -> CornerInsets {
+        match size {
+            TextSize::Small => SMALL,
+            TextSize::Medium => MEDIUM,
+            TextSize::Large => LARGE,
+        }
+    }
 }
 
 /// Everything bootstrap() gathers before Tauri starts. Pulled out so the
@@ -218,6 +267,34 @@ fn sync_flash_checkmarks(
     let _ = m5.set_checked(flash_row_selected(flash, 300));
 }
 
+fn text_size_row_selected(display: &DisplayPrefs, size: TextSize) -> bool {
+    display.text_size == size
+}
+
+fn sync_text_size_checkmarks(
+    small: &CheckMenuItem<tauri::Wry>,
+    medium: &CheckMenuItem<tauri::Wry>,
+    large: &CheckMenuItem<tauri::Wry>,
+    display: &DisplayPrefs,
+) {
+    let _ = small.set_checked(text_size_row_selected(display, TextSize::Small));
+    let _ = medium.set_checked(text_size_row_selected(display, TextSize::Medium));
+    let _ = large.set_checked(text_size_row_selected(display, TextSize::Large));
+}
+
+fn sync_position_checkmarks(
+    tl: &CheckMenuItem<tauri::Wry>,
+    tr: &CheckMenuItem<tauri::Wry>,
+    bl: &CheckMenuItem<tauri::Wry>,
+    br: &CheckMenuItem<tauri::Wry>,
+    corner: Corner,
+) {
+    let _ = tl.set_checked(corner == Corner::TopLeft);
+    let _ = tr.set_checked(corner == Corner::TopRight);
+    let _ = bl.set_checked(corner == Corner::BottomLeft);
+    let _ = br.set_checked(corner == Corner::BottomRight);
+}
+
 /// Handles for tray items that must stay alive for the menu (checkmarks
 /// are updated from the menu event handler; other fields are kept so the
 /// native items are not dropped).
@@ -231,15 +308,27 @@ struct TrayMenuControls {
     flash_1: CheckMenuItem<tauri::Wry>,
     flash_2: CheckMenuItem<tauri::Wry>,
     flash_5: CheckMenuItem<tauri::Wry>,
+    text_size_small: CheckMenuItem<tauri::Wry>,
+    text_size_medium: CheckMenuItem<tauri::Wry>,
+    text_size_large: CheckMenuItem<tauri::Wry>,
+    pos_tl: CheckMenuItem<tauri::Wry>,
+    pos_tr: CheckMenuItem<tauri::Wry>,
+    pos_bl: CheckMenuItem<tauri::Wry>,
+    pos_br: CheckMenuItem<tauri::Wry>,
 }
 
 /// Apply `corner` to the overlay window using [`overlay_screen_inset`] gaps
 /// from the monitor work-area edges.
 fn apply_corner(app: &AppHandle, corner: Corner) {
-    use overlay_screen_inset::{
-        BOTTOM_LEFT_X, BOTTOM_LEFT_Y, BOTTOM_RIGHT_X, BOTTOM_RIGHT_Y, TOP_LEFT_X, TOP_LEFT_Y,
-        TOP_RIGHT_X, TOP_RIGHT_Y,
-    };
+    let text_size = app
+        .try_state::<ManagedBootstrap>()
+        .map(|st| {
+            st.0.lock()
+                .map(|g| g.prefs.display.text_size)
+                .unwrap_or(TextSize::Medium)
+        })
+        .unwrap_or(TextSize::Medium);
+    let ins = overlay_screen_inset::for_text_size(text_size);
 
     let Some(window) = app.get_webview_window(OVERLAY_LABEL) else {
         return;
@@ -265,23 +354,23 @@ fn apply_corner(app: &AppHandle, corner: Corner) {
 
     let (x, y) = match corner {
         Corner::TopLeft => {
-            let inset_x = TOP_LEFT_X * scale;
-            let inset_y = TOP_LEFT_Y * scale;
+            let inset_x = ins.top_left_x * scale;
+            let inset_y = ins.top_left_y * scale;
             (mon_x + inset_x, mon_y + inset_y)
         }
         Corner::TopRight => {
-            let inset_x = TOP_RIGHT_X * scale;
-            let inset_y = TOP_RIGHT_Y * scale;
+            let inset_x = ins.top_right_x * scale;
+            let inset_y = ins.top_right_y * scale;
             (mon_x + mon_w - win_w - inset_x, mon_y + inset_y)
         }
         Corner::BottomLeft => {
-            let inset_x = BOTTOM_LEFT_X * scale;
-            let inset_y = BOTTOM_LEFT_Y * scale;
+            let inset_x = ins.bottom_left_x * scale;
+            let inset_y = ins.bottom_left_y * scale;
             (mon_x + inset_x, mon_y + mon_h - win_h - inset_y)
         }
         Corner::BottomRight => {
-            let inset_x = BOTTOM_RIGHT_X * scale;
-            let inset_y = BOTTOM_RIGHT_Y * scale;
+            let inset_x = ins.bottom_right_x * scale;
+            let inset_y = ins.bottom_right_y * scale;
             (
                 mon_x + mon_w - win_w - inset_x,
                 mon_y + mon_h - win_h - inset_y,
@@ -314,9 +403,9 @@ pub type CurrentCorner = Arc<Mutex<Corner>>;
 /// IPC/ctl, or initial bootstrap).
 fn visibility_menu_label(visible: bool) -> &'static str {
     if visible {
-        "Hide"
+        "Hide Timer"
     } else {
-        "Show"
+        "Show Timer"
     }
 }
 
@@ -355,10 +444,38 @@ fn build_tray(
         true,
         None::<&str>,
     )?;
-    let pos_tl = MenuItem::with_id(app, "pos-tl", "Top left", true, None::<&str>)?;
-    let pos_tr = MenuItem::with_id(app, "pos-tr", "Top right", true, None::<&str>)?;
-    let pos_bl = MenuItem::with_id(app, "pos-bl", "Bottom left", true, None::<&str>)?;
-    let pos_br = MenuItem::with_id(app, "pos-br", "Bottom right", true, None::<&str>)?;
+    let pos_tl = CheckMenuItem::with_id(
+        app,
+        "pos-tl",
+        "Top left",
+        true,
+        prefs.position.corner == Corner::TopLeft,
+        None::<&str>,
+    )?;
+    let pos_tr = CheckMenuItem::with_id(
+        app,
+        "pos-tr",
+        "Top right",
+        true,
+        prefs.position.corner == Corner::TopRight,
+        None::<&str>,
+    )?;
+    let pos_bl = CheckMenuItem::with_id(
+        app,
+        "pos-bl",
+        "Bottom left",
+        true,
+        prefs.position.corner == Corner::BottomLeft,
+        None::<&str>,
+    )?;
+    let pos_br = CheckMenuItem::with_id(
+        app,
+        "pos-br",
+        "Bottom right",
+        true,
+        prefs.position.corner == Corner::BottomRight,
+        None::<&str>,
+    )?;
     let position = Submenu::with_id_and_items(
         app,
         "position",
@@ -370,7 +487,7 @@ fn build_tray(
     let alarm = CheckMenuItem::with_id(
         app,
         "audio-alarm",
-        "Audio Alarm",
+        "Sound Enabled",
         true,
         prefs.alarm.enabled,
         None::<&str>,
@@ -378,7 +495,7 @@ fn build_tray(
     let status_color = CheckMenuItem::with_id(
         app,
         "display-status-color",
-        "Enable Colors",
+        "Colors Enabled",
         true,
         prefs.display.status_color,
         None::<&str>,
@@ -423,13 +540,53 @@ fn build_tray(
         &[&flash_off, &flash_1, &flash_2, &flash_5],
     )?;
 
+    let text_size_small = CheckMenuItem::with_id(
+        app,
+        "text-size-small",
+        "Small",
+        true,
+        text_size_row_selected(&prefs.display, TextSize::Small),
+        None::<&str>,
+    )?;
+    let text_size_medium = CheckMenuItem::with_id(
+        app,
+        "text-size-medium",
+        "Medium",
+        true,
+        text_size_row_selected(&prefs.display, TextSize::Medium),
+        None::<&str>,
+    )?;
+    let text_size_large = CheckMenuItem::with_id(
+        app,
+        "text-size-large",
+        "Large",
+        true,
+        text_size_row_selected(&prefs.display, TextSize::Large),
+        None::<&str>,
+    )?;
+    let text_size_menu = Submenu::with_id_and_items(
+        app,
+        "text-size-submenu",
+        "Text Size",
+        true,
+        &[&text_size_small, &text_size_medium, &text_size_large],
+    )?;
+
     // Native menu toolkits (GTK on Linux, Cocoa on macOS) only allow a
     // menu item to appear at one position in a menu hierarchy, so each
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&visibility, &position, &sep1, &alarm, &status_color, &flash_menu],
+        &[
+            &visibility,
+            &sep1,
+            &alarm,
+            &status_color,
+            &position,
+            &text_size_menu,
+            &flash_menu,
+        ],
     )?;
 
     let app_for_tray = app.clone();
@@ -441,6 +598,13 @@ fn build_tray(
     let flash_1_tray = flash_1.clone();
     let flash_2_tray = flash_2.clone();
     let flash_5_tray = flash_5.clone();
+    let text_size_small_tray = text_size_small.clone();
+    let text_size_medium_tray = text_size_medium.clone();
+    let text_size_large_tray = text_size_large.clone();
+    let pos_tl_tray = pos_tl.clone();
+    let pos_tr_tray = pos_tr.clone();
+    let pos_bl_tray = pos_bl.clone();
+    let pos_br_tray = pos_br.clone();
     let tray_theme = resolved_tray_theme(app);
     // Glyph-only stopwatch (transparent background). We ship separate PNGs
     // for light vs dark system chrome (`tray-light.png` / `tray-dark.png`)
@@ -463,6 +627,13 @@ fn build_tray(
                 persist_preferences(&app_for_tray, |prefs| {
                     prefs.position.corner = c;
                 });
+                sync_position_checkmarks(
+                    &pos_tl_tray,
+                    &pos_tr_tray,
+                    &pos_bl_tray,
+                    &pos_br_tray,
+                    c,
+                );
             };
             let sync_flash = || {
                 if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
@@ -472,6 +643,16 @@ fn build_tray(
                         &flash_2_tray,
                         &flash_5_tray,
                         &g.prefs.flash,
+                    );
+                }
+            };
+            let sync_text_size = || {
+                if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
+                    sync_text_size_checkmarks(
+                        &text_size_small_tray,
+                        &text_size_medium_tray,
+                        &text_size_large_tray,
+                        &g.prefs.display,
                     );
                 }
             };
@@ -506,6 +687,36 @@ fn build_tray(
                     if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
                         let _ = status_color_for_tray.set_checked(g.prefs.display.status_color);
                     }
+                }
+                "text-size-small" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.display.text_size = TextSize::Small;
+                    });
+                    sync_text_size();
+                    let c = *corner_for_tray
+                        .lock()
+                        .expect("current-corner mutex poisoned");
+                    apply_corner(&app_for_tray, c);
+                }
+                "text-size-medium" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.display.text_size = TextSize::Medium;
+                    });
+                    sync_text_size();
+                    let c = *corner_for_tray
+                        .lock()
+                        .expect("current-corner mutex poisoned");
+                    apply_corner(&app_for_tray, c);
+                }
+                "text-size-large" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.display.text_size = TextSize::Large;
+                    });
+                    sync_text_size();
+                    let c = *corner_for_tray
+                        .lock()
+                        .expect("current-corner mutex poisoned");
+                    apply_corner(&app_for_tray, c);
                 }
                 "flash-off" => {
                     persist_preferences(&app_for_tray, |p| {
@@ -548,6 +759,13 @@ fn build_tray(
         flash_1: flash_1,
         flash_2: flash_2,
         flash_5: flash_5,
+        text_size_small,
+        text_size_medium,
+        text_size_large,
+        pos_tl,
+        pos_tr,
+        pos_bl,
+        pos_br,
     })
 }
 

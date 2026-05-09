@@ -48,6 +48,21 @@ pub struct FlashPrefs {
     pub threshold_seconds: u32,
 }
 
+/// Countdown digit scale (tray + overlay). JSON: `small` | `medium` | `large`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl Default for TextSize {
+    fn default() -> Self {
+        TextSize::Medium
+    }
+}
+
 /// Overlay presentation toggles (desktop only). JSON uses camelCase.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +70,8 @@ pub struct DisplayPrefs {
     /// §9.2 countdown phase colors (green / amber / red). Off → neutral white on black.
     #[serde(default = "default_status_color_on")]
     pub status_color: bool,
+    #[serde(default)]
+    pub text_size: TextSize,
 }
 
 fn default_status_color_on() -> bool {
@@ -65,6 +82,7 @@ impl Default for DisplayPrefs {
     fn default() -> Self {
         Self {
             status_color: true,
+            text_size: TextSize::default(),
         }
     }
 }
@@ -299,6 +317,7 @@ mod tests {
         assert_eq!(p.flash.threshold_seconds, 60);
         assert_eq!(p.position.corner, Corner::BottomRight);
         assert!(p.display.status_color);
+        assert_eq!(p.display.text_size, TextSize::Medium);
         assert!(!p.hidden);
     }
 
@@ -372,6 +391,7 @@ mod tests {
         assert!(out.preferences.flash.enabled);
         assert_eq!(out.preferences.flash.threshold_seconds, 180);
         assert!(out.preferences.display.status_color);
+        assert_eq!(out.preferences.display.text_size, TextSize::Medium);
     }
 
     #[test]
