@@ -60,7 +60,7 @@ fn exe_compare_candidates(exe: &Path) -> Vec<String> {
 
 fn registry_exe_matches(registry_path: &str, candidates: &[String]) -> bool {
     let reg = normalize_compare_path(registry_path);
-    candidates.iter().any(|c| *c == reg)
+    candidates.contains(&reg)
 }
 
 /// Returns `Ok(true)` if at least one `NotifyIconSettings` entry belongs to

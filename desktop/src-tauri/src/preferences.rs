@@ -49,18 +49,13 @@ pub struct FlashPrefs {
 }
 
 /// Countdown digit scale (tray + overlay). JSON: `small` | `medium` | `large`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TextSize {
     Small,
+    #[default]
     Medium,
     Large,
-}
-
-impl Default for TextSize {
-    fn default() -> Self {
-        TextSize::Medium
-    }
 }
 
 /// Overlay presentation toggles (desktop only). JSON uses camelCase.
