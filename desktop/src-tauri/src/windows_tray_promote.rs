@@ -28,6 +28,16 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::core::GUID;
 
+/// Dev-only stdout traces (`cargo tauri dev` / debug builds). Release and
+/// `cargo test` stay silent.
+#[cfg(all(debug_assertions, not(test)))]
+fn tray_promote_debug(msg: impl std::fmt::Display) {
+    println!("[tca-timer tray-promote] {msg}");
+}
+
+#[cfg(not(all(debug_assertions, not(test))))]
+fn tray_promote_debug(_msg: impl std::fmt::Display) {}
+
 const NOTIFY_ICON_SETTINGS: &str = r"Control Panel\NotifyIconSettings";
 
 /// Folders Explorer commonly uses in `NotifyIconSettings` `ExecutablePath`.
@@ -49,19 +59,55 @@ const RETRY_SLEEP_MS: &[u64] = &[0, 120, 400, 1000, 2500];
 
 pub fn spawn_promote_tray_icon_for_current_exe() {
     let Ok(our_exe) = std::env::current_exe() else {
+        tray_promote_debug("skipped: current_exe() failed");
         return;
     };
 
+    tray_promote_debug(format!(
+        "started background promotion for {}",
+        our_exe.display()
+    ));
+
     thread::spawn(move || {
-        for &delay_ms in RETRY_SLEEP_MS {
+        let mut last_io_err: Option<std::io::Error> = None;
+        for (attempt, &delay_ms) in RETRY_SLEEP_MS.iter().enumerate() {
             if delay_ms > 0 {
                 thread::sleep(Duration::from_millis(delay_ms));
             }
-            match promote_once(&our_exe) {
-                Ok(true) => break,
-                Ok(false) | Err(_) => continue,
+            match promote_once(&our_exe, attempt + 1, delay_ms) {
+                Ok(true) => {
+                    tray_promote_debug(format!(
+                        "finished successfully (attempt {} after delay_ms={})",
+                        attempt + 1,
+                        delay_ms
+                    ));
+                    return;
+                }
+                Ok(false) => {
+                    tray_promote_debug(format!(
+                        "attempt {}: no matching NotifyIconSettings row yet (delay_ms={})",
+                        attempt + 1,
+                        delay_ms
+                    ));
+                }
+                Err(e) => {
+                    tray_promote_debug(format!(
+                        "attempt {}: registry error: {e} (delay_ms={})",
+                        attempt + 1,
+                        delay_ms
+                    ));
+                    last_io_err = Some(e);
+                }
             }
         }
+        tray_promote_debug(format!(
+            "stopped after {} attempts; {}",
+            RETRY_SLEEP_MS.len(),
+            match last_io_err {
+                Some(e) => format!("last error: {e}"),
+                None => "Explorer never registered a matching ExecutablePath (timing or path mismatch)".to_string(),
+            }
+        ));
     });
 }
 
@@ -209,16 +255,41 @@ fn registry_exe_matches(registry_path: &str, candidates: &[String]) -> bool {
 
 /// Returns `Ok(true)` if at least one `NotifyIconSettings` entry belongs to
 /// this executable (whether or not we had to set `IsPromoted`).
-fn promote_once(our_exe: &Path) -> std::io::Result<bool> {
+fn promote_once(our_exe: &Path, attempt: usize, delay_ms: u64) -> std::io::Result<bool> {
     let candidates = exe_compare_candidates(our_exe);
     if candidates.is_empty() {
+        tray_promote_debug(format!(
+            "attempt {attempt}: no path candidates from {}",
+            our_exe.display()
+        ));
         return Ok(false);
+    }
+
+    tray_promote_debug(format!(
+        "attempt {attempt}: {} normalized path candidate(s) (delay_ms={delay_ms})",
+        candidates.len()
+    ));
+    if attempt == 1 {
+        for (i, c) in candidates.iter().take(8).enumerate() {
+            tray_promote_debug(format!("  candidate[{}]: {}", i, c));
+        }
+        if candidates.len() > 8 {
+            tray_promote_debug(format!(
+                "  … and {} more",
+                candidates.len().saturating_sub(8)
+            ));
+        }
     }
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let settings = match hkcu.open_subkey(NOTIFY_ICON_SETTINGS) {
         Ok(k) => k,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tray_promote_debug(format!(
+                "attempt {attempt}: registry key missing: HKCU\\{NOTIFY_ICON_SETTINGS}"
+            ));
+            return Ok(false);
+        }
         Err(e) => return Err(e),
     };
 
@@ -239,11 +310,31 @@ fn promote_once(our_exe: &Path) -> std::io::Result<bool> {
             continue;
         }
 
+        let reg_norms = normalized_registry_paths(&exe_path);
+        let promoted: u32 = sub.get_value("IsPromoted").unwrap_or(0);
+
+        tray_promote_debug(format!(
+            "matched setting {} … ExecutablePath={exe_path:?}",
+            key_name
+        ));
+        tray_promote_debug(format!(
+            "  normalized registry forms: {}",
+            reg_norms.join(" | ")
+        ));
+        tray_promote_debug(format!(
+            "  IsPromoted={promoted}{}",
+            if promoted == 1 {
+                " (already on taskbar strip)"
+            } else {
+                ", writing IsPromoted=1"
+            }
+        ));
+
         saw_ours = true;
 
-        let promoted: u32 = sub.get_value("IsPromoted").unwrap_or(0);
         if promoted != 1 {
             sub.set_value("IsPromoted", &1u32)?;
+            tray_promote_debug("  registry updated");
         }
     }
 
