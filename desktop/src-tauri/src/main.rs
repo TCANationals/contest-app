@@ -5,6 +5,8 @@ mod config;
 mod display_watch;
 mod ipc_server;
 mod preferences;
+#[cfg(windows)]
+mod windows_tray_promote;
 
 use std::sync::Arc;
 
@@ -907,6 +909,10 @@ fn main() {
                     None
                 }
             };
+            #[cfg(windows)]
+            if tray_controls.is_some() {
+                windows_tray_promote::spawn_promote_tray_icon_for_current_exe();
+            }
             let tray_icon_opt = tray_controls.as_ref().map(|c| c.tray.clone());
             let visibility_item = tray_controls.map(|c| c.visibility);
 
