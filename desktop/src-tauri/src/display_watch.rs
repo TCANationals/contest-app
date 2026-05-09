@@ -21,6 +21,10 @@
 //! watcher still runs (so we surface debug logging during dev) but
 //! [`spawn_command`] is a no-op. This matches the legacy app's
 //! `os.platform() != 'win32'` early-return.
+//!
+//! When a command is configured we also run it once at overlay startup
+//! ([`run_startup`]) so the desktop reflects the current layout even if
+//! the display configuration did not change since the last run.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -136,6 +140,15 @@ fn spawn_command(argv: &[String]) {
             "tca-timer: display-change detected; not spawning {program} (non-Windows host)"
         );
     }
+}
+
+/// Run the configured refresh command once at application startup.
+///
+/// Independent of [`DisplayWatcher`] change detection: the watcher still
+/// skips firing on its first fingerprint sample so this does not cause a
+/// duplicate spawn on the next poll tick when the layout is unchanged.
+pub fn run_startup(argv: &[String]) {
+    spawn_command(argv);
 }
 
 /// Handle returned by [`start`]. Holding it keeps the watcher thread

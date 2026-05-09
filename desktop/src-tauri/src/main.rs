@@ -15,8 +15,8 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
-    tray::{TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Listener, Manager, RunEvent, WindowEvent,
+    tray::{TrayIcon, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Listener, Manager, RunEvent, Theme, WindowEvent,
 };
 use tca_timer_ipc_server::Handler;
 
@@ -213,12 +213,29 @@ fn visibility_menu_label(visible: bool) -> &'static str {
     }
 }
 
+/// Resolved system chrome theme for the overlay window (`Light` / `Dark`).
+/// Falls back to dark so the legacy white-on-alpha tray glyph stays the
+/// default when theme cannot be read.
+fn resolved_tray_theme(app: &AppHandle) -> Theme {
+    app.get_webview_window(OVERLAY_LABEL)
+        .and_then(|w| w.theme().ok())
+        .unwrap_or(Theme::Dark)
+}
+
+fn tray_image_for_theme(theme: Theme) -> tauri::image::Image<'static> {
+    match theme {
+        Theme::Dark => tauri::include_image!("icons/tray-dark.png"),
+        Theme::Light => tauri::include_image!("icons/tray-light.png"),
+        _ => tauri::include_image!("icons/tray-dark.png"),
+    }
+}
+
 fn build_tray(
     app: &AppHandle,
     current_corner: CurrentCorner,
     state: AppState,
     initial_visible: bool,
-) -> tauri::Result<MenuItem<tauri::Wry>> {
+) -> tauri::Result<(MenuItem<tauri::Wry>, TrayIcon<tauri::Wry>)> {
     // A single toggle item that flips between "Show" and "Hide" based on
     // the current overlay visibility. Displaying both at once (the old
     // behavior) is confusing — at any moment only one of the two actions
@@ -241,27 +258,24 @@ fn build_tray(
         true,
         &[&pos_tl, &pos_tr, &pos_bl, &pos_br],
     )?;
-    let prefs = MenuItem::with_id(app, "prefs", "Preferences\u{2026}", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     // Native menu toolkits (GTK on Linux, Cocoa on macOS) only allow a
     // menu item to appear at one position in a menu hierarchy, so each
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&visibility, &position, &sep1, &prefs, &sep2, &quit])?;
+    let menu = Menu::with_items(app, &[&visibility, &position, &sep1, &quit])?;
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
     let state_for_tray = state.clone();
-    // Glyph-only stopwatch (transparent background) so the tray reads
-    // cleanly on every platform: macOS uses `icon_as_template(true)` to
-    // tint based on light/dark menu-bar appearance, and Windows/Linux
-    // taskbar trays render the white-on-alpha bitmap directly. The
-    // gradient-backed launcher icon (`icon.png`) would look wrong shrunk
-    // to ~22px in a system tray.
-    let _tray = TrayIconBuilder::with_id("main")
-        .icon(tauri::include_image!("icons/tray.png"))
-        .icon_as_template(true)
+    let tray_theme = resolved_tray_theme(app);
+    // Glyph-only stopwatch (transparent background). We ship separate PNGs
+    // for light vs dark system chrome (`tray-light.png` / `tray-dark.png`)
+    // and swap on `ThemeChanged`. Template mode is off so each asset is
+    // shown as-authored (Windows/Linux tray and macOS menu bar).
+    let tray_icon = TrayIconBuilder::with_id("main")
+        .icon(tray_image_for_theme(tray_theme))
+        .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("TCA Timer")
@@ -289,9 +303,6 @@ fn build_tray(
                 "pos-tr" => reposition(Corner::TopRight, "topRight"),
                 "pos-bl" => reposition(Corner::BottomLeft, "bottomLeft"),
                 "pos-br" => reposition(Corner::BottomRight, "bottomRight"),
-                "prefs" => {
-                    let _ = app_for_tray.emit("overlay:open-preferences", ());
-                }
                 "quit" => {
                     app_for_tray.exit(0);
                 }
@@ -300,7 +311,7 @@ fn build_tray(
         })
         .on_tray_icon_event(|_icon, _event: TrayIconEvent| {})
         .build(app)?;
-    Ok(visibility)
+    Ok((visibility, tray_icon))
 }
 
 fn main() {
@@ -362,6 +373,9 @@ fn main() {
                     .config
                     .as_ref()
                     .and_then(|c| c.display_change_command.clone());
+                if let Some(ref cmd) = argv {
+                    display_watch::run_startup(cmd);
+                }
                 argv.map(|argv| display_watch::start(handle.clone(), argv))
             };
 
@@ -372,23 +386,8 @@ fn main() {
             // events. We also forward DPI events to the display watcher
             // so the configured command fires on the same tick the OS
             // tells us about a scale change, instead of up to 2 s
-            // later.
-            if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-                let handle_for_scale = handle.clone();
-                let corner_for_scale = current_corner.clone();
-                let watcher_for_scale = display_watcher.clone();
-                w.on_window_event(move |event| {
-                    if matches!(event, WindowEvent::ScaleFactorChanged { .. }) {
-                        let c = *corner_for_scale
-                            .lock()
-                            .expect("current-corner mutex poisoned");
-                        apply_corner(&handle_for_scale, c);
-                        if let Some(w) = watcher_for_scale.as_ref() {
-                            w.trigger(&handle_for_scale);
-                        }
-                    }
-                });
-            }
+            // later. `ThemeChanged` + tray icon swap are registered after
+            // `build_tray` (see below) so we hold a `TrayIcon` handle.
 
             // Bridge IPC -> overlay state. The WebView owns the WS
             // connection, so IPC "send" effects translate to Tauri
@@ -426,18 +425,44 @@ fn main() {
             // update the label whenever visibility changes from ANY
             // source: the tray item itself, the IPC /timer/show/hide/
             // toggle surface, or the initial-state logic above.
-            let visibility_item = match build_tray(
+            let (visibility_item, tray_icon_opt) = match build_tray(
                 &handle,
                 current_corner.clone(),
                 state.clone(),
                 initial_visible,
             ) {
-                Ok(item) => Some(item),
+                Ok((vis, tray)) => (Some(vis), Some(tray)),
                 Err(err) => {
                     eprintln!("tca-timer: tray init failed: {err}");
-                    None
+                    (None, None)
                 }
             };
+
+            if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
+                let handle_for_win = handle.clone();
+                let corner_for_scale = current_corner.clone();
+                let watcher_for_scale = display_watcher.clone();
+                let tray_for_theme = tray_icon_opt.clone();
+                w.on_window_event(move |event| {
+                    match event {
+                        WindowEvent::ScaleFactorChanged { .. } => {
+                            let c = *corner_for_scale
+                                .lock()
+                                .expect("current-corner mutex poisoned");
+                            apply_corner(&handle_for_win, c);
+                            if let Some(w) = watcher_for_scale.as_ref() {
+                                w.trigger(&handle_for_win);
+                            }
+                        }
+                        WindowEvent::ThemeChanged(theme) => {
+                            if let Some(tray) = tray_for_theme.as_ref() {
+                                let _ = tray.set_icon(Some(tray_image_for_theme(*theme)));
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
 
             if let Some(item) = visibility_item {
                 // `overlay:set-visible` is emitted by the `set_visible`

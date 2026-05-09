@@ -6,7 +6,9 @@
 //!
 //! 1. Command-line flags: `--room-key <key>`, `--server <host>`.
 //! 2. Windows registry (production):
-//!    `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`.
+//!    `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`,
+//!    `\DisplayChangeCommand` (`REG_MULTI_SZ` argv list, or `REG_SZ` for a
+//!    single executable path).
 //! 3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
 //!    `/Library/Application Support/TCATimer/config.json` on macOS, and
 //!    `/etc/tca-timer/config.json` on Linux. JSON keys `roomKey`,
@@ -338,6 +340,19 @@ pub fn read_registry() -> SourceEntry {
 }
 
 #[cfg(windows)]
+fn display_change_command_from_registry(key: &winreg::RegKey) -> Option<Vec<String>> {
+    use winreg::enums::{REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ};
+    use winreg::types::FromRegValue;
+
+    let rv = key.get_raw_value("DisplayChangeCommand").ok()?;
+    match rv.vtype {
+        REG_MULTI_SZ => Vec::<String>::from_reg_value(&rv).ok(),
+        REG_SZ | REG_EXPAND_SZ => String::from_reg_value(&rv).ok().map(|s| vec![s]),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
 fn read_registry_windows() -> std::io::Result<SourceValues> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
@@ -349,14 +364,7 @@ fn read_registry_windows() -> std::io::Result<SourceValues> {
             Ok(SourceValues {
                 room_key: get("RoomKey"),
                 server: get("Server"),
-                // Registry storage is awkward for argv arrays, and the
-                // BgInfo refresh hook is naturally provisioned via the
-                // `%PROGRAMDATA%\TCATimer\config.json` file alongside
-                // the rest of the venue configuration. If we ever need
-                // a registry override, switch this to `REG_MULTI_SZ`
-                // via `key.get_raw_value("DisplayChangeCommand")` and
-                // decode the UTF-16 list into argv.
-                display_change_command: None,
+                display_change_command: display_change_command_from_registry(&key),
             })
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(SourceValues::default()),
