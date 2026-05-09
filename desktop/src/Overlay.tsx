@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { countdownStyle, formatCountdown } from '@tca-timer/shared';
+import {
+  alarmBaselineKey,
+  computeRemainingMs,
+  countdownStyle,
+  END_TIMER_ALARM_ASSET_PATH,
+  formatCountdown,
+  shouldFireAlarm,
+} from '@tca-timer/shared';
 
 import { layoutForCorner } from './layout';
-import { computeRemainingMs, shouldFireAlarm, shouldFlash } from './timer';
+import { shouldFlash } from './timer';
 import { buildContestantUrl } from './url';
 import type {
   BootstrapPayload,
@@ -85,10 +92,10 @@ export function Overlay() {
   // derived `displayMs` below re-evaluates against the wall clock. Its
   // value is ignored.
   const [, setRenderTick] = useState(0);
-  // Shared 1 Hz on/off phase for both the sub-minute pulse (§9.2) and
-  // the under-threshold flash (§9.5.2). When both apply simultaneously
-  // the flash (0/1) dominates the pulse (0.55/1); see the opacity
-  // calculation below.
+  // Shared 1 Hz phase for the sub-minute pulse (§9.2) and the
+  // under-threshold flash (§9.5.2). Flash modulates outline stroke color
+  // (black ↔ white); pulse still uses digit opacity when flash is on but
+  // not yet in the flash window.
   const [blinkPhase, setBlinkPhase] = useState(false);
 
   const clientRef = useRef<WsClient | null>(null);
@@ -137,6 +144,11 @@ export function Overlay() {
     };
     void Promise.all([
       tryListen<boolean>('overlay:set-visible', (v) => setVisible(v)),
+      tryListen<Preferences>('overlay:preferences-changed', (next) => {
+        setBootstrap((prev) =>
+          prev ? { ...prev, preferences: next } : prev,
+        );
+      }),
       tryListen<void>('overlay:send-help-request', () => {
         const client = clientRef.current;
         if (client) client.sendHelpRequest();
@@ -203,12 +215,18 @@ export function Overlay() {
     return () => clearInterval(id);
   }, [timer, offsetMs, bootstrap]);
 
-  // Reset the alarm "previous remaining" tracker whenever the timer
-  // state changes so that, e.g., a fresh TIMER_SET doesn't look like "we
-  // just crossed zero" to `shouldFireAlarm` on the next tick.
+  // Reset the alarm "previous remaining" tracker only when the server
+  // timer session changes (set / pause / idle / new endsAt). Resetting
+  // on every STATE object reference would wipe the pre-zero sample when a
+  // broadcast arrives already at 00:00, and `shouldFireAlarm` would never
+  // see a positive → 0 crossing.
+  const alarmBaseline = alarmBaselineKey(timer);
   useEffect(() => {
     prevRemRef.current = computeRemainingMs(timer, offsetMs);
-  }, [timer]);
+    // `timer` omitted on purpose: baseline tracks server intent; a fresh
+    // STATE JSON object each ping must not re-sync prevRem.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps = baseline + offset only
+  }, [alarmBaseline, offsetMs]);
 
   // 1 Hz on/off phase for flash + pulse (§9.2 / §9.5.2). Purely
   // cosmetic; does not affect timekeeping.
@@ -229,25 +247,32 @@ export function Overlay() {
   const style = countdownStyle(timer.status, displayMs);
   const isRunning = timer.status === 'running';
   const rem = displayMs ?? 0;
+  const flashEnabled = prefs?.flash.enabled ?? false;
   const flashing = shouldFlash(
     timer.status,
     rem,
-    prefs?.flash.enabled ?? false,
-    prefs?.flash.thresholdMinutes ?? 2,
+    flashEnabled,
+    prefs?.flash.thresholdSeconds ?? 60,
   );
 
   const opacity = connected ? 1 : 0.7;
-  // §9.5.2 flash (color ↔ transparent) dominates §9.2 pulse (1 ↔ 0.55)
-  // when both apply in the final minute — otherwise multiplying them
-  // collapses to the same binary on/off and the softer pulse is never
-  // visible.
+  // §9.2 gives `style.pulse` in the final minute (red digits). That pulse
+  // must not run when flash is disabled. When flash is off, digits stay
+  // steady even under one minute.
+  // §9.5.2 under-threshold flash keeps digits fully opaque and animates
+  // outline stroke black ↔ white (smooth via CSS transition). When flash
+  // is on but remaining time is still above the threshold, §9.2 pulse
+  // (opacity 1 ↔ 0.55) still applies in the final minute.
   const digitOpacity = flashing
-    ? blinkPhase
-      ? 0
-      : 1
-    : style.pulse && blinkPhase
+    ? 1
+    : flashEnabled && style.pulse && blinkPhase
       ? 0.55
       : 1;
+  const flashOutlineColor = blinkPhase ? '#FFFFFF' : '#000000';
+  const outlineStrokeColor = flashing ? flashOutlineColor : style.outline;
+  const countdownTransition = flashing
+    ? 'opacity 150ms linear, -webkit-text-stroke-color 450ms ease-in-out'
+    : 'opacity 150ms linear';
 
   if (!visible) {
     return null;
@@ -320,9 +345,10 @@ export function Overlay() {
           fontSize: '48px',
           fontWeight: 700,
           color: style.color,
-          WebkitTextStroke: `2px ${style.outline}`,
+          WebkitTextStrokeWidth: 2,
+          WebkitTextStrokeColor: outlineStrokeColor,
           opacity: digitOpacity,
-          transition: 'opacity 150ms linear',
+          transition: countdownTransition,
           lineHeight: 1,
         }}
       >
@@ -426,7 +452,7 @@ function playAlarm(
     }
     const a = ref.current;
     a.volume = Math.max(0, Math.min(1, volume));
-    a.src = '/alarm.wav';
+    a.src = END_TIMER_ALARM_ASSET_PATH;
     void a.play().catch(() => undefined);
     // §9.5.1: cap playback at 4 s.
     window.setTimeout(() => {

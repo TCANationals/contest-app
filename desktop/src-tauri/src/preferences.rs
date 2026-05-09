@@ -37,11 +37,13 @@ pub struct AlarmPrefs {
     pub volume: f32,
 }
 
+/// Flash begins when remaining time is at or below `threshold_seconds`
+/// while the timer is running. JSON field: `thresholdSeconds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlashPrefs {
     pub enabled: bool,
-    #[serde(rename = "thresholdMinutes")]
-    pub threshold_minutes: f32,
+    #[serde(rename = "thresholdSeconds")]
+    pub threshold_seconds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,11 +66,11 @@ impl Default for Preferences {
             version: CURRENT_VERSION,
             alarm: AlarmPrefs {
                 enabled: true,
-                volume: 0.6,
+                volume: 1.0,
             },
             flash: FlashPrefs {
-                enabled: false,
-                threshold_minutes: 2.0,
+                enabled: true,
+                threshold_seconds: 60,
             },
             position: PositionPrefs {
                 corner: Corner::BottomRight,
@@ -81,8 +83,10 @@ impl Default for Preferences {
 impl Preferences {
     /// Clamp / repair invalid ranges per §9.5. Called after deserializing.
     pub fn normalize(&mut self) {
-        self.alarm.volume = self.alarm.volume.clamp(0.0, 1.0);
-        self.flash.threshold_minutes = self.flash.threshold_minutes.clamp(0.5, 30.0);
+        // Alarm is always played at full volume (tray is on/off only).
+        self.alarm.volume = 1.0;
+        // 30 s … 30 min (same span as the former minute-based clamp).
+        self.flash.threshold_seconds = self.flash.threshold_seconds.clamp(30, 30 * 60);
     }
 }
 
@@ -182,6 +186,8 @@ pub fn write_atomic(path: &Path, prefs: &Preferences) -> std::io::Result<()> {
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        #[cfg(windows)]
+        hide_tcatimer_folder_on_windows(parent);
     }
 
     let tmp = path.with_extension("json.tmp");
@@ -196,6 +202,34 @@ pub fn write_atomic(path: &Path, prefs: &Preferences) -> std::io::Result<()> {
     }
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// When the preferences directory is `%USERPROFILE%\.tcatimer`, mark that
+/// folder with the Windows hidden attribute so it stays out of default
+/// Explorer views (same intent as other dot-directories on Unix).
+#[cfg(windows)]
+fn hide_tcatimer_folder_on_windows(dir: &Path) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN,
+        INVALID_FILE_ATTRIBUTES,
+    };
+
+    if dir.file_name() != Some(OsStr::new(".tcatimer")) {
+        return;
+    }
+
+    let mut wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
+    wide.push(0);
+
+    unsafe {
+        let attrs = GetFileAttributesW(wide.as_ptr());
+        if attrs == INVALID_FILE_ATTRIBUTES {
+            return;
+        }
+        let _ = SetFileAttributesW(wide.as_ptr(), attrs | FILE_ATTRIBUTE_HIDDEN);
+    }
 }
 
 /// Canonical on-disk path (§9.5): `~/.tcatimer/preferences.json`.
@@ -236,9 +270,9 @@ mod tests {
         let p = Preferences::default();
         assert_eq!(p.version, 1);
         assert!(p.alarm.enabled);
-        assert!((p.alarm.volume - 0.6).abs() < 1e-6);
+        assert!((p.alarm.volume - 1.0).abs() < 1e-6);
         assert!(!p.flash.enabled);
-        assert!((p.flash.threshold_minutes - 2.0).abs() < 1e-6);
+        assert_eq!(p.flash.threshold_seconds, 60);
         assert_eq!(p.position.corner, Corner::BottomRight);
         assert!(!p.hidden);
     }
@@ -257,14 +291,16 @@ mod tests {
         let mut p = Preferences::default();
         p.alarm.volume = 0.25;
         p.flash.enabled = true;
-        p.flash.threshold_minutes = 1.5;
+        p.flash.threshold_seconds = 90;
         p.position.corner = Corner::TopLeft;
         p.hidden = true;
         write_atomic(&path, &p).unwrap();
 
         let out = load_from_path(&path);
         assert!(matches!(out.action, LoadAction::Loaded));
-        assert_eq!(out.preferences, p);
+        let mut expected = p;
+        expected.normalize();
+        assert_eq!(out.preferences, expected);
     }
 
     #[test]
@@ -301,29 +337,31 @@ mod tests {
         // the current schema since there were no prior public versions.
         std::fs::write(
             &path,
-            r#"{"version":0,"alarm":{"enabled":false,"volume":0.9},"flash":{"enabled":true,"thresholdMinutes":3.0},"position":{"corner":"topRight"},"hidden":false}"#,
+            r#"{"version":0,"alarm":{"enabled":false,"volume":0.9},"flash":{"enabled":true,"thresholdSeconds":180},"position":{"corner":"topRight"},"hidden":false}"#,
         )
         .unwrap();
         let out = load_from_path(&path);
         assert!(matches!(out.action, LoadAction::Migrated { from: 0 }));
         assert_eq!(out.preferences.version, CURRENT_VERSION);
         assert!(!out.preferences.alarm.enabled);
+        assert!(out.preferences.flash.enabled);
+        assert_eq!(out.preferences.flash.threshold_seconds, 180);
     }
 
     #[test]
     fn normalize_clamps_out_of_range_values() {
         let mut p = Preferences::default();
         p.alarm.volume = 2.5;
-        p.flash.threshold_minutes = 100.0;
+        p.flash.threshold_seconds = 100 * 60;
         p.normalize();
         assert!((p.alarm.volume - 1.0).abs() < 1e-6);
-        assert!((p.flash.threshold_minutes - 30.0).abs() < 1e-6);
+        assert_eq!(p.flash.threshold_seconds, 30 * 60);
 
         p.alarm.volume = -1.0;
-        p.flash.threshold_minutes = 0.1;
+        p.flash.threshold_seconds = 10;
         p.normalize();
-        assert!(p.alarm.volume.abs() < 1e-6);
-        assert!((p.flash.threshold_minutes - 0.5).abs() < 1e-6);
+        assert!((p.alarm.volume - 1.0).abs() < 1e-6);
+        assert_eq!(p.flash.threshold_seconds, 30);
     }
 
     #[test]

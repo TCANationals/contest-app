@@ -10,11 +10,13 @@ use std::sync::Arc;
 
 use app_state::{AppState, Effects};
 use config::{resolve, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
-use preferences::{load_from_path, write_atomic, Corner, LoadAction, Preferences};
+use preferences::{
+    load_from_path, write_atomic, Corner, FlashPrefs, LoadAction, Preferences,
+};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Listener, Manager, RunEvent, Theme, WindowEvent,
 };
@@ -134,6 +136,7 @@ fn get_bootstrap(state: tauri::State<'_, ManagedBootstrap>) -> BootstrapPayload 
 #[tauri::command]
 fn save_preferences(
     prefs: Preferences,
+    app: AppHandle,
     state: tauri::State<'_, ManagedBootstrap>,
 ) -> Result<(), String> {
     let mut b = state.0.lock().map_err(|e| e.to_string())?;
@@ -142,8 +145,69 @@ fn save_preferences(
     if let Some(p) = b.prefs_path.as_deref() {
         write_atomic(p, &normalized).map_err(|e| e.to_string())?;
     }
-    b.prefs = normalized;
+    b.prefs = normalized.clone();
+    let _ = app.emit("overlay:preferences-changed", normalized);
     Ok(())
+}
+
+/// Update in-memory preferences, write them to disk (§9.5), and notify
+/// the overlay (`overlay:preferences-changed`). Tray and IPC paths use
+/// this so corner / visibility / alarm / flash survive restart without the
+/// frontend calling `save_preferences`.
+fn persist_preferences(app: &AppHandle, patch: impl FnOnce(&mut Preferences)) {
+    let snapshot = {
+        let state = app.state::<ManagedBootstrap>();
+        let mut guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("tca-timer: bootstrap mutex poisoned, cannot save preferences: {e}");
+                return;
+            }
+        };
+        patch(&mut guard.prefs);
+        guard.prefs.normalize();
+        if let Some(p) = guard.prefs_path.as_deref() {
+            if let Err(err) = write_atomic(p, &guard.prefs) {
+                eprintln!(
+                    "tca-timer: failed to write preferences to {}: {err}",
+                    p.display()
+                );
+            }
+        }
+        guard.prefs.clone()
+    };
+    let _ = app.emit("overlay:preferences-changed", snapshot);
+}
+
+fn flash_row_selected(flash: &FlashPrefs, seconds: u32) -> bool {
+    flash.enabled && flash.threshold_seconds == seconds
+}
+
+fn sync_flash_checkmarks(
+    off: &CheckMenuItem<tauri::Wry>,
+    m1: &CheckMenuItem<tauri::Wry>,
+    m2: &CheckMenuItem<tauri::Wry>,
+    m5: &CheckMenuItem<tauri::Wry>,
+    flash: &FlashPrefs,
+) {
+    let _ = off.set_checked(!flash.enabled);
+    let _ = m1.set_checked(flash_row_selected(flash, 60));
+    let _ = m2.set_checked(flash_row_selected(flash, 120));
+    let _ = m5.set_checked(flash_row_selected(flash, 300));
+}
+
+/// Handles for tray items that must stay alive for the menu (checkmarks
+/// are updated from the menu event handler; other fields are kept so the
+/// native items are not dropped).
+#[allow(dead_code)]
+struct TrayMenuControls {
+    visibility: MenuItem<tauri::Wry>,
+    tray: TrayIcon<tauri::Wry>,
+    alarm: CheckMenuItem<tauri::Wry>,
+    flash_off: CheckMenuItem<tauri::Wry>,
+    flash_1: CheckMenuItem<tauri::Wry>,
+    flash_2: CheckMenuItem<tauri::Wry>,
+    flash_5: CheckMenuItem<tauri::Wry>,
 }
 
 /// Apply `corner` to the overlay window, placing it `EDGE_MARGIN` from the
@@ -235,7 +299,8 @@ fn build_tray(
     current_corner: CurrentCorner,
     state: AppState,
     initial_visible: bool,
-) -> tauri::Result<(MenuItem<tauri::Wry>, TrayIcon<tauri::Wry>)> {
+    prefs: &Preferences,
+) -> tauri::Result<TrayMenuControls> {
     // A single toggle item that flips between "Show" and "Hide" based on
     // the current overlay visibility. Displaying both at once (the old
     // behavior) is confusing — at any moment only one of the two actions
@@ -258,16 +323,72 @@ fn build_tray(
         true,
         &[&pos_tl, &pos_tr, &pos_bl, &pos_br],
     )?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+
+    let alarm = CheckMenuItem::with_id(
+        app,
+        "audio-alarm",
+        "Audio Alarm",
+        true,
+        prefs.alarm.enabled,
+        None::<&str>,
+    )?;
+    let flash_off = CheckMenuItem::with_id(
+        app,
+        "flash-off",
+        "Off",
+        true,
+        !prefs.flash.enabled,
+        None::<&str>,
+    )?;
+    let flash_1 = CheckMenuItem::with_id(
+        app,
+        "flash-1",
+        "1 Minute Remaining",
+        true,
+        flash_row_selected(&prefs.flash, 60),
+        None::<&str>,
+    )?;
+    let flash_2 = CheckMenuItem::with_id(
+        app,
+        "flash-2",
+        "2 Minutes Remaining",
+        true,
+        flash_row_selected(&prefs.flash, 120),
+        None::<&str>,
+    )?;
+    let flash_5 = CheckMenuItem::with_id(
+        app,
+        "flash-5",
+        "5 Minutes Remaining",
+        true,
+        flash_row_selected(&prefs.flash, 300),
+        None::<&str>,
+    )?;
+    let flash_menu = Submenu::with_id_and_items(
+        app,
+        "flash-submenu",
+        "Flash",
+        true,
+        &[&flash_off, &flash_1, &flash_2, &flash_5],
+    )?;
+
     // Native menu toolkits (GTK on Linux, Cocoa on macOS) only allow a
     // menu item to appear at one position in a menu hierarchy, so each
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&visibility, &position, &sep1, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&visibility, &position, &sep1, &alarm, &flash_menu],
+    )?;
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
     let state_for_tray = state.clone();
+    let alarm_for_tray = alarm.clone();
+    let flash_off_tray = flash_off.clone();
+    let flash_1_tray = flash_1.clone();
+    let flash_2_tray = flash_2.clone();
+    let flash_5_tray = flash_5.clone();
     let tray_theme = resolved_tray_theme(app);
     // Glyph-only stopwatch (transparent background). We ship separate PNGs
     // for light vs dark system chrome (`tray-light.png` / `tray-dark.png`)
@@ -287,6 +408,20 @@ fn build_tray(
                     .lock()
                     .expect("current-corner mutex poisoned") = c;
                 let _ = app_for_tray.emit("overlay:set-corner", label);
+                persist_preferences(&app_for_tray, |prefs| {
+                    prefs.position.corner = c;
+                });
+            };
+            let sync_flash = || {
+                if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
+                    sync_flash_checkmarks(
+                        &flash_off_tray,
+                        &flash_1_tray,
+                        &flash_2_tray,
+                        &flash_5_tray,
+                        &g.prefs.flash,
+                    );
+                }
             };
             match id {
                 // Route visibility through AppState so the IPC /status
@@ -303,15 +438,56 @@ fn build_tray(
                 "pos-tr" => reposition(Corner::TopRight, "topRight"),
                 "pos-bl" => reposition(Corner::BottomLeft, "bottomLeft"),
                 "pos-br" => reposition(Corner::BottomRight, "bottomRight"),
-                "quit" => {
-                    app_for_tray.exit(0);
+                "audio-alarm" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.alarm.enabled = !p.alarm.enabled;
+                        p.alarm.volume = 1.0;
+                    });
+                    if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
+                        let _ = alarm_for_tray.set_checked(g.prefs.alarm.enabled);
+                    }
+                }
+                "flash-off" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.flash.enabled = false;
+                    });
+                    sync_flash();
+                }
+                "flash-1" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.flash.enabled = true;
+                        p.flash.threshold_seconds = 60;
+                    });
+                    sync_flash();
+                }
+                "flash-2" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.flash.enabled = true;
+                        p.flash.threshold_seconds = 120;
+                    });
+                    sync_flash();
+                }
+                "flash-5" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.flash.enabled = true;
+                        p.flash.threshold_seconds = 300;
+                    });
+                    sync_flash();
                 }
                 _ => {}
             }
         })
         .on_tray_icon_event(|_icon, _event: TrayIconEvent| {})
         .build(app)?;
-    Ok((visibility, tray_icon))
+    Ok(TrayMenuControls {
+        visibility,
+        tray: tray_icon,
+        alarm,
+        flash_off,
+        flash_1: flash_1,
+        flash_2: flash_2,
+        flash_5: flash_5,
+    })
 }
 
 fn main() {
@@ -407,6 +583,9 @@ fn main() {
                     set_visible: Box::new(move |v| {
                         apply_visibility(&handle_vis, v);
                         let _ = handle_vis.emit("overlay:set-visible", v);
+                        persist_preferences(&handle_vis, |prefs| {
+                            prefs.hidden = !v;
+                        });
                     }),
                 },
             );
@@ -425,18 +604,28 @@ fn main() {
             // update the label whenever visibility changes from ANY
             // source: the tray item itself, the IPC /timer/show/hide/
             // toggle surface, or the initial-state logic above.
-            let (visibility_item, tray_icon_opt) = match build_tray(
+            let prefs_for_tray = handle
+                .state::<ManagedBootstrap>()
+                .0
+                .lock()
+                .expect("bootstrap mutex poisoned")
+                .prefs
+                .clone();
+            let tray_controls = match build_tray(
                 &handle,
                 current_corner.clone(),
                 state.clone(),
                 initial_visible,
+                &prefs_for_tray,
             ) {
-                Ok((vis, tray)) => (Some(vis), Some(tray)),
+                Ok(c) => Some(c),
                 Err(err) => {
                     eprintln!("tca-timer: tray init failed: {err}");
-                    (None, None)
+                    None
                 }
             };
+            let tray_icon_opt = tray_controls.as_ref().map(|c| c.tray.clone());
+            let visibility_item = tray_controls.map(|c| c.visibility);
 
             if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
                 let handle_for_win = handle.clone();

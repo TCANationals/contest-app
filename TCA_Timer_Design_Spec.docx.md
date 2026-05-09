@@ -534,7 +534,7 @@ The border MUST be at least 2 px wide and applied as a stroke/outline on the tex
 
 **Storage:** %USERPROFILE%\\.tcatimer\\preferences.json. Atomic writes (write to a temp file in the same directory, fsync, rename). Created with defaults if missing. Schema-versioned.
 
-| // preferences.json (version 1\) {   "version": 1,   "alarm": {     "enabled": true,     "volume": 0.6              // 0.0 \- 1.0   },   "flash": {     "enabled": false,     "thresholdMinutes": 2.0    // valid range: 0.5 \- 30.0   },   "position": {     "corner": "bottomRight"   // bottomRight | bottomLeft | topRight | topLeft   },   "hidden": false } |
+| // preferences.json (version 1\) {   "version": 1,   "alarm": {     "enabled": true,     "volume": 1.0              // always full level in current build   },   "flash": {     "enabled": false,     "thresholdSeconds": 60     // integer seconds; default 1 min; clamped at runtime to 30 \- 1800   },   "position": {     "corner": "bottomRight"   // bottomRight | bottomLeft | topRight | topLeft   },   "hidden": false } |
 | :---- |
 
 ### **9.5.1 End-of-timer alarm**
@@ -553,7 +553,7 @@ The border MUST be at least 2 px wide and applied as a stroke/outline on the tex
 
 ### **9.5.2 Configurable flash**
 
-* If preferences.flash.enabled \=== true and remaining time ≤ thresholdMinutes \* 60\_000 ms while running, the countdown display flashes between its current color (per §9.2 priorities) and the overlay's transparent background at 1 Hz.
+* If preferences.flash.enabled \=== true and remaining time ≤ thresholdSeconds \* 1000 ms while running, the countdown display flashes between its current color (per §9.2 priorities) and the overlay's transparent background at 1 Hz.
 
 * Flashing stops on transition to idle or paused, or when remaining time exceeds the threshold (after a TIMER\_ADJUST that adds time).
 

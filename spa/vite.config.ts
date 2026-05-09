@@ -30,7 +30,7 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: 'autoUpdate',
         workbox: {
-          globPatterns: ['**/*.{js,css,html,svg,ico,png,webmanifest}'],
+          globPatterns: ['**/*.{js,css,html,svg,ico,png,mp3,webmanifest}'],
           navigateFallback: '/index.html',
           // Server-owned paths must reach Fastify without the SW
           // rewriting them to the SPA shell. Without this, a top-level

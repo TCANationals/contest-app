@@ -19,6 +19,7 @@ tca-timer-ipc-proto = { path = "../ipc-proto" }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.48", features = ["Win32_Storage_FileSystem"] }
 
 [features]
 default = ["custom-protocol"]

@@ -14,7 +14,7 @@ export type PositionCorner =
 export interface Preferences {
   version: number;
   alarm: { enabled: boolean; volume: number };
-  flash: { enabled: boolean; thresholdMinutes: number };
+  flash: { enabled: boolean; thresholdSeconds: number };
   position: { corner: PositionCorner };
   hidden: boolean;
 }

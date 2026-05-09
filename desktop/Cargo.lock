@@ -3865,6 +3865,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tca-timer-ipc-proto",
  "tca-timer-ipc-server",
+ "windows-sys 0.48.0",
  "winreg 0.52.0",
 ]
 

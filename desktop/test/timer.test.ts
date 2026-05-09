@@ -1,75 +1,29 @@
-// `computeRemainingMs` is now exercised in the shared package
-// (`shared/test/compute.test.ts`). The desktop-specific alarm and
-// flash decisions stay covered here because they only ship in the
-// overlay (§9.5).
+// `computeRemainingMs` and §9.5.1 alarm helpers are covered in
+// `shared/test/`. Flash (§9.5.2) stays desktop-only.
 
 import { describe, it, expect } from 'vitest';
 
-import { shouldFireAlarm, shouldFlash } from '../src/timer';
-
-describe('shouldFireAlarm', () => {
-  const base = {
-    status: 'running' as const,
-    remainingMs: 0,
-    previousRemainingMs: 500,
-    lastFiredAt: null as number | null,
-    now: 1_000_000,
-    enabled: true,
-  };
-
-  it('fires on the first tick where running crosses to 0', () => {
-    expect(shouldFireAlarm(base)).toBe(true);
-  });
-
-  it('does not fire when disabled', () => {
-    expect(shouldFireAlarm({ ...base, enabled: false })).toBe(false);
-  });
-
-  it('does not fire when not running', () => {
-    expect(shouldFireAlarm({ ...base, status: 'idle' })).toBe(false);
-    expect(shouldFireAlarm({ ...base, status: 'paused' })).toBe(false);
-  });
-
-  it('does not fire while remaining is still positive', () => {
-    expect(
-      shouldFireAlarm({ ...base, remainingMs: 100 }),
-    ).toBe(false);
-  });
-
-  it('does not fire on subsequent zeroed ticks', () => {
-    expect(
-      shouldFireAlarm({ ...base, previousRemainingMs: 0 }),
-    ).toBe(false);
-  });
-
-  it('does not fire again within 30 seconds of a prior fire', () => {
-    expect(
-      shouldFireAlarm({ ...base, lastFiredAt: base.now - 10_000 }),
-    ).toBe(false);
-  });
-
-  it('can fire once the 30 second cooldown elapses', () => {
-    expect(
-      shouldFireAlarm({ ...base, lastFiredAt: base.now - 30_001 }),
-    ).toBe(true);
-  });
-});
+import { shouldFlash } from '../src/timer';
 
 describe('shouldFlash', () => {
   it('flashes while running under the threshold', () => {
-    expect(shouldFlash('running', 60_000, true, 2)).toBe(true);
+    expect(shouldFlash('running', 60_000, true, 60)).toBe(true);
   });
 
   it('does not flash when disabled', () => {
-    expect(shouldFlash('running', 60_000, false, 2)).toBe(false);
+    expect(shouldFlash('running', 60_000, false, 60)).toBe(false);
   });
 
   it('stops flashing above the threshold', () => {
-    expect(shouldFlash('running', 2 * 60_000 + 1, true, 2)).toBe(false);
+    expect(shouldFlash('running', 60_000 + 1, true, 60)).toBe(false);
   });
 
   it('does not flash when paused or idle', () => {
-    expect(shouldFlash('paused', 10_000, true, 2)).toBe(false);
-    expect(shouldFlash('idle', 10_000, true, 2)).toBe(false);
+    expect(shouldFlash('paused', 10_000, true, 60)).toBe(false);
+    expect(shouldFlash('idle', 10_000, true, 60)).toBe(false);
+  });
+
+  it('does not flash when remaining time is zero', () => {
+    expect(shouldFlash('running', 0, true, 60)).toBe(false);
   });
 });
