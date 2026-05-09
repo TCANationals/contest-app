@@ -9,13 +9,16 @@
 //! refreshed.
 //!
 //! The watcher polls the monitor list every [`POLL_INTERVAL`] and fires
-//! the command whenever the fingerprint changes. We poll instead of
-//! relying on a single platform-specific event because no portable
-//! "displays-changed" event exists in Tauri / `tao`, and the legacy app
-//! likewise polled (every 2 s) on top of its event listeners as a
-//! safety net. The Tauri `WindowEvent::ScaleFactorChanged` handler in
-//! `main.rs` calls [`DisplayWatcher::trigger`] directly so DPI changes
-//! don't have to wait for the next poll tick.
+//! the optional external command whenever the fingerprint changes. The
+//! same tick also runs [`WatchOptions::on_monitors_changed`] so the
+//! overlay window can re-pin to the user's corner after resolution /
+//! arrangement changes that never emit `ScaleFactorChanged`. We poll
+//! instead of relying on a single platform-specific event because no
+//! portable "displays-changed" event exists in Tauri / `tao`, and the
+//! legacy app likewise polled (every 2 s) on top of its event listeners
+//! as a safety net. The Tauri `WindowEvent::ScaleFactorChanged` handler
+//! in `main.rs` calls [`DisplayWatcher::trigger`] directly so DPI
+//! changes don't have to wait for the next poll tick.
 //!
 //! The command is **only spawned on Windows** — on macOS / Linux the
 //! watcher still runs (so we surface debug logging during dev) but
@@ -30,6 +33,19 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+
+/// Optional hook after a **real** monitor-configuration change (not the
+/// initial baseline sample). `main.rs` installs this to re-pin the overlay.
+pub type MonitorChangeCallback = Arc<dyn Fn(&AppHandle) + Send + Sync>;
+
+/// Configuration for [`start`].
+pub struct WatchOptions {
+    /// Windows-only BgInfo-style refresh command; [`None`] skips spawning.
+    pub command_argv: Option<Vec<String>>,
+    /// Overlay repositioning (and any similar work) when monitors move,
+    /// resize, connect, or disconnect.
+    pub on_monitors_changed: Option<MonitorChangeCallback>,
+}
 use std::thread;
 use std::time::Duration;
 
@@ -162,7 +178,8 @@ pub struct DisplayWatcher {
 }
 
 struct Inner {
-    argv: Vec<String>,
+    command_argv: Option<Vec<String>>,
+    on_monitors_changed: Option<MonitorChangeCallback>,
     /// Fingerprint of the last monitor configuration we observed.
     /// Shared with the polling thread so [`DisplayWatcher::trigger`] can
     /// re-check before firing — that way the explicit
@@ -203,12 +220,16 @@ impl DisplayWatcher {
         *guard = Some(current);
         drop(guard);
 
-        // Only fire the command on real changes. The first observation
-        // (whether from the polling thread or an early `trigger()`)
-        // establishes the baseline silently, so we don't spuriously
-        // refresh BgInfo every time the overlay relaunches.
+        // Only react on real changes. The first observation (whether from
+        // the polling thread or an early `trigger()`) establishes the
+        // baseline silently.
         if was_initialized && changed {
-            spawn_command(&self.inner.argv);
+            if let Some(argv) = self.inner.command_argv.as_ref() {
+                spawn_command(argv);
+            }
+            if let Some(cb) = self.inner.on_monitors_changed.as_ref() {
+                cb(app);
+            }
         }
     }
 }
@@ -217,13 +238,11 @@ impl DisplayWatcher {
 /// the process exits; the returned handle can be used to force an
 /// extra check from a window event.
 ///
-/// `argv` is the command line to invoke when the display configuration
-/// changes. The first element is the program; remaining elements are
-/// arguments passed to it via `std::process::Command::args`.
-pub fn start(app: AppHandle, argv: Vec<String>) -> DisplayWatcher {
+pub fn start(app: AppHandle, options: WatchOptions) -> DisplayWatcher {
     let watcher = DisplayWatcher {
         inner: Arc::new(Inner {
-            argv,
+            command_argv: options.command_argv,
+            on_monitors_changed: options.on_monitors_changed,
             last_fingerprint: Mutex::new(None),
             initialized: AtomicBool::new(false),
         }),

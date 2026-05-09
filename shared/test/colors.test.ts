@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { countdownStyle } from '../src/colors';
+import { countdownStyle, NEUTRAL_COUNTDOWN_STYLE } from '../src/colors';
+
+describe('NEUTRAL_COUNTDOWN_STYLE', () => {
+  it('is white on black with no pulse (desktop status-color off)', () => {
+    expect(NEUTRAL_COUNTDOWN_STYLE).toEqual({
+      color: '#FFFFFF',
+      outline: '#000000',
+      pulse: false,
+    });
+  });
+});
 
 describe('countdownStyle', () => {
   it('uses idle gray with black outline when idle', () => {

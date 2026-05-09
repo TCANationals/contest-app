@@ -6,7 +6,9 @@ import type { PositionCorner } from './types';
  * overlay window.
  *
  * The Tauri host (`apply_corner` in `src-tauri/src/main.rs`) pins the
- * window itself `EDGE_MARGIN` (24px) away from the named screen
+ * window itself per-corner logical px (`overlay_screen_inset` in
+ * `src-tauri/src/main.rs`, scaled by DPI; mirrored in
+ * `overlayScreenInset.ts` for in-window padding) away from the named screen
  * corner. Without this helper the contents flex-centred inside the
  * window, leaving the digits visually floating ~tens of pixels inside
  * the screen corner — looking misaligned. Mirroring the window's

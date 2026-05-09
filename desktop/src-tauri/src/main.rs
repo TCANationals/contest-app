@@ -23,7 +23,29 @@ use tauri::{
 use tca_timer_ipc_server::Handler;
 
 const OVERLAY_LABEL: &str = "overlay";
-const EDGE_MARGIN: f64 = 24.0;
+
+/// Gap between the overlay window and the **monitor work-area** edge, in
+/// **logical** pixels. Each value is multiplied by the monitor
+/// `scale_factor` in [`apply_corner`] (same convention as the former
+/// single `EDGE_MARGIN`).
+///
+/// Horizontal = inset from the **left** edge (`TopLeft`, `BottomLeft`) or
+/// from the **right** edge (`TopRight`, `BottomRight`).  
+/// Vertical = inset from the **top** edge (`TopLeft`, `TopRight`) or from
+/// the **bottom** edge (`BottomLeft`, `BottomRight`).
+///
+/// Keep numeric defaults in sync with `OVERLAY_SCREEN_INSET` in the frontend
+/// (`desktop/src/overlayScreenInset.ts`).
+mod overlay_screen_inset {
+    pub const TOP_LEFT_X: f64 = 15.0;
+    pub const TOP_LEFT_Y: f64 = 5.0;
+    pub const TOP_RIGHT_X: f64 = 15.0;
+    pub const TOP_RIGHT_Y: f64 = 5.0;
+    pub const BOTTOM_LEFT_X: f64 = 15.0;
+    pub const BOTTOM_LEFT_Y: f64 = 35.0;
+    pub const BOTTOM_RIGHT_X: f64 = 15.0;
+    pub const BOTTOM_RIGHT_Y: f64 = 35.0;
+}
 
 /// Everything bootstrap() gathers before Tauri starts. Pulled out so the
 /// entire resolution is unit-testable in `config::` / `preferences::`.
@@ -204,15 +226,21 @@ struct TrayMenuControls {
     visibility: MenuItem<tauri::Wry>,
     tray: TrayIcon<tauri::Wry>,
     alarm: CheckMenuItem<tauri::Wry>,
+    status_color: CheckMenuItem<tauri::Wry>,
     flash_off: CheckMenuItem<tauri::Wry>,
     flash_1: CheckMenuItem<tauri::Wry>,
     flash_2: CheckMenuItem<tauri::Wry>,
     flash_5: CheckMenuItem<tauri::Wry>,
 }
 
-/// Apply `corner` to the overlay window, placing it `EDGE_MARGIN` from the
-/// work-area edges of its current monitor.
+/// Apply `corner` to the overlay window using [`overlay_screen_inset`] gaps
+/// from the monitor work-area edges.
 fn apply_corner(app: &AppHandle, corner: Corner) {
+    use overlay_screen_inset::{
+        BOTTOM_LEFT_X, BOTTOM_LEFT_Y, BOTTOM_RIGHT_X, BOTTOM_RIGHT_Y, TOP_LEFT_X, TOP_LEFT_Y,
+        TOP_RIGHT_X, TOP_RIGHT_Y,
+    };
+
     let Some(window) = app.get_webview_window(OVERLAY_LABEL) else {
         return;
     };
@@ -227,7 +255,6 @@ fn apply_corner(app: &AppHandle, corner: Corner) {
     let scale = monitor.scale_factor();
     let pos = monitor.position();
     let m_size = monitor.size();
-    let margin_px = EDGE_MARGIN * scale;
 
     let win_w = size.width as f64;
     let win_h = size.height as f64;
@@ -237,13 +264,29 @@ fn apply_corner(app: &AppHandle, corner: Corner) {
     let mon_y = pos.y as f64;
 
     let (x, y) = match corner {
-        Corner::TopLeft => (mon_x + margin_px, mon_y + margin_px),
-        Corner::TopRight => (mon_x + mon_w - win_w - margin_px, mon_y + margin_px),
-        Corner::BottomLeft => (mon_x + margin_px, mon_y + mon_h - win_h - margin_px),
-        Corner::BottomRight => (
-            mon_x + mon_w - win_w - margin_px,
-            mon_y + mon_h - win_h - margin_px,
-        ),
+        Corner::TopLeft => {
+            let inset_x = TOP_LEFT_X * scale;
+            let inset_y = TOP_LEFT_Y * scale;
+            (mon_x + inset_x, mon_y + inset_y)
+        }
+        Corner::TopRight => {
+            let inset_x = TOP_RIGHT_X * scale;
+            let inset_y = TOP_RIGHT_Y * scale;
+            (mon_x + mon_w - win_w - inset_x, mon_y + inset_y)
+        }
+        Corner::BottomLeft => {
+            let inset_x = BOTTOM_LEFT_X * scale;
+            let inset_y = BOTTOM_LEFT_Y * scale;
+            (mon_x + inset_x, mon_y + mon_h - win_h - inset_y)
+        }
+        Corner::BottomRight => {
+            let inset_x = BOTTOM_RIGHT_X * scale;
+            let inset_y = BOTTOM_RIGHT_Y * scale;
+            (
+                mon_x + mon_w - win_w - inset_x,
+                mon_y + mon_h - win_h - inset_y,
+            )
+        }
     };
 
     let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
@@ -332,6 +375,14 @@ fn build_tray(
         prefs.alarm.enabled,
         None::<&str>,
     )?;
+    let status_color = CheckMenuItem::with_id(
+        app,
+        "display-status-color",
+        "Enable Colors",
+        true,
+        prefs.display.status_color,
+        None::<&str>,
+    )?;
     let flash_off = CheckMenuItem::with_id(
         app,
         "flash-off",
@@ -378,13 +429,14 @@ fn build_tray(
     let sep1 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&visibility, &position, &sep1, &alarm, &flash_menu],
+        &[&visibility, &position, &sep1, &alarm, &status_color, &flash_menu],
     )?;
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
     let state_for_tray = state.clone();
     let alarm_for_tray = alarm.clone();
+    let status_color_for_tray = status_color.clone();
     let flash_off_tray = flash_off.clone();
     let flash_1_tray = flash_1.clone();
     let flash_2_tray = flash_2.clone();
@@ -447,6 +499,14 @@ fn build_tray(
                         let _ = alarm_for_tray.set_checked(g.prefs.alarm.enabled);
                     }
                 }
+                "display-status-color" => {
+                    persist_preferences(&app_for_tray, |p| {
+                        p.display.status_color = !p.display.status_color;
+                    });
+                    if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
+                        let _ = status_color_for_tray.set_checked(g.prefs.display.status_color);
+                    }
+                }
                 "flash-off" => {
                     persist_preferences(&app_for_tray, |p| {
                         p.flash.enabled = false;
@@ -483,6 +543,7 @@ fn build_tray(
         visibility,
         tray: tray_icon,
         alarm,
+        status_color,
         flash_off,
         flash_1: flash_1,
         flash_2: flash_2,
@@ -533,13 +594,13 @@ fn main() {
                     .expect("current-corner mutex poisoned"),
             );
 
-            // Wire up the optional Windows-only display-change command
-            // (e.g. BgInfo refresh — see `display_watch` module docs and
-            // the legacy timer-desktop `index.js`). The watcher runs on
-            // every platform but only spawns the configured command on
-            // Windows. We start it before the `ScaleFactorChanged`
-            // handler so the handler can trigger an immediate re-check
-            // without waiting for the next 2 s poll.
+            // Poll monitor geometry every 2 s (see `display_watch`) so we
+            // re-pin the overlay when resolution / arrangement / DPI
+            // changes — not only when `ScaleFactorChanged` fires. Optional
+            // `display_change_command` (BgInfo, etc.) runs on the same
+            // fingerprint transition. Start before `ScaleFactorChanged`
+            // so `trigger()` can force an immediate poll.
+            let corner_for_display_watch = current_corner.clone();
             let display_watcher = {
                 let argv = handle
                     .state::<ManagedBootstrap>()
@@ -552,17 +613,21 @@ fn main() {
                 if let Some(ref cmd) = argv {
                     display_watch::run_startup(cmd);
                 }
-                argv.map(|argv| display_watch::start(handle.clone(), argv))
+                display_watch::start(handle.clone(), display_watch::WatchOptions {
+                    command_argv: argv,
+                    on_monitors_changed: Some(Arc::new(move |app| {
+                        let c = *corner_for_display_watch
+                            .lock()
+                            .expect("current-corner mutex poisoned");
+                        apply_corner(app, c);
+                    })),
+                })
             };
 
-            // Re-pin to whichever corner the user most recently chose
-            // whenever the monitor setup changes (§9.2 "Multi-monitor").
-            // Reading from the shared `CurrentCorner` means a tray
-            // reposition made after launch survives later DPI / display
-            // events. We also forward DPI events to the display watcher
-            // so the configured command fires on the same tick the OS
-            // tells us about a scale change, instead of up to 2 s
-            // later. `ThemeChanged` + tray icon swap are registered after
+            // Tray reposition survives DPI / display events via the
+            // shared `CurrentCorner`. `ScaleFactorChanged` also calls
+            // `DisplayWatcher::trigger` so we don't wait up to 2 s.
+            // `ThemeChanged` + tray icon swap are registered after
             // `build_tray` (see below) so we hold a `TrayIcon` handle.
 
             // Bridge IPC -> overlay state. The WebView owns the WS
@@ -639,9 +704,7 @@ fn main() {
                                 .lock()
                                 .expect("current-corner mutex poisoned");
                             apply_corner(&handle_for_win, c);
-                            if let Some(w) = watcher_for_scale.as_ref() {
-                                w.trigger(&handle_for_win);
-                            }
+                            watcher_for_scale.trigger(&handle_for_win);
                         }
                         WindowEvent::ThemeChanged(theme) => {
                             if let Some(tray) = tray_for_theme.as_ref() {

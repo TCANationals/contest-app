@@ -10,7 +10,7 @@ export {
 } from './alarm';
 export { computeRemainingMs } from './compute';
 export { formatCountdown, formatMs } from './format';
-export { countdownStyle } from './colors';
+export { countdownStyle, NEUTRAL_COUNTDOWN_STYLE } from './colors';
 export type { CountdownStyle } from './colors';
 export { OffsetTracker, computeSample, median } from './timesync';
 export type { OffsetSample, TimerState, TimerStatus } from './types';

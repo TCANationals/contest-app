@@ -34,6 +34,13 @@ const PALETTE = {
   white: '#FFFFFF',
 } as const;
 
+/** Desktop overlay: digits when §9.2 phase colors are turned off in prefs. */
+export const NEUTRAL_COUNTDOWN_STYLE: CountdownStyle = {
+  color: PALETTE.white,
+  outline: PALETTE.black,
+  pulse: false,
+};
+
 /**
  * Resolve the (color, outline, pulse) triple for the countdown digits
  * given the current `(status, remainingMs)`. Pure function; no DOM,

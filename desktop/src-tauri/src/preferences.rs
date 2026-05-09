@@ -27,6 +27,8 @@ pub struct Preferences {
     pub version: u32,
     pub alarm: AlarmPrefs,
     pub flash: FlashPrefs,
+    #[serde(default)]
+    pub display: DisplayPrefs,
     pub position: PositionPrefs,
     pub hidden: bool,
 }
@@ -44,6 +46,27 @@ pub struct FlashPrefs {
     pub enabled: bool,
     #[serde(rename = "thresholdSeconds")]
     pub threshold_seconds: u32,
+}
+
+/// Overlay presentation toggles (desktop only). JSON uses camelCase.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayPrefs {
+    /// §9.2 countdown phase colors (green / amber / red). Off → neutral white on black.
+    #[serde(default = "default_status_color_on")]
+    pub status_color: bool,
+}
+
+fn default_status_color_on() -> bool {
+    true
+}
+
+impl Default for DisplayPrefs {
+    fn default() -> Self {
+        Self {
+            status_color: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,6 +95,7 @@ impl Default for Preferences {
                 enabled: true,
                 threshold_seconds: 60,
             },
+            display: DisplayPrefs::default(),
             position: PositionPrefs {
                 corner: Corner::BottomRight,
             },
@@ -271,9 +295,10 @@ mod tests {
         assert_eq!(p.version, 1);
         assert!(p.alarm.enabled);
         assert!((p.alarm.volume - 1.0).abs() < 1e-6);
-        assert!(!p.flash.enabled);
+        assert!(p.flash.enabled);
         assert_eq!(p.flash.threshold_seconds, 60);
         assert_eq!(p.position.corner, Corner::BottomRight);
+        assert!(p.display.status_color);
         assert!(!p.hidden);
     }
 
@@ -346,6 +371,7 @@ mod tests {
         assert!(!out.preferences.alarm.enabled);
         assert!(out.preferences.flash.enabled);
         assert_eq!(out.preferences.flash.threshold_seconds, 180);
+        assert!(out.preferences.display.status_color);
     }
 
     #[test]

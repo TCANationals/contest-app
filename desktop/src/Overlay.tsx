@@ -6,10 +6,12 @@ import {
   countdownStyle,
   END_TIMER_ALARM_ASSET_PATH,
   formatCountdown,
+  NEUTRAL_COUNTDOWN_STYLE,
   shouldFireAlarm,
 } from '@tca-timer/shared';
 
 import { layoutForCorner } from './layout';
+import { overlayPaddingPx } from './overlayScreenInset';
 import { shouldFlash } from './timer';
 import { buildContestantUrl } from './url';
 import type {
@@ -82,7 +84,7 @@ export function Overlay() {
   // Mirrors the Tauri-side `current_corner`: which screen corner the
   // overlay window is anchored to. We hug that same corner with our
   // flex alignment so the digits sit right against the screen edge
-  // (`EDGE_MARGIN` away in the host code) instead of floating in the
+  // (`overlay_screen_inset` in `main.rs`) instead of floating in the
   // middle of the 380×96 window. Defaults to `bottomRight` to match
   // the default Preferences corner — the bootstrap payload below
   // overrides it as soon as it lands, and the
@@ -244,7 +246,11 @@ export function Overlay() {
   // red when transitioning idle → running, etc.).
   const displayMs: number | null =
     timer.status === 'idle' ? null : computeRemainingMs(timer, offsetMs);
-  const style = countdownStyle(timer.status, displayMs);
+  const rawCountdownStyle = countdownStyle(timer.status, displayMs);
+  const statusColorEnabled = prefs?.display.statusColor ?? true;
+  const style = statusColorEnabled
+    ? rawCountdownStyle
+    : NEUTRAL_COUNTDOWN_STYLE;
   const isRunning = timer.status === 'running';
   const rem = displayMs ?? 0;
   const flashEnabled = prefs?.flash.enabled ?? false;
@@ -280,13 +286,14 @@ export function Overlay() {
 
   if (bootstrapError) {
     return (
-      <ConfigError message={`Bootstrap failed: ${bootstrapError}`} />
+      <ConfigError corner={corner} message={`Bootstrap failed: ${bootstrapError}`} />
     );
   }
 
   if (bootstrap?.configError) {
     return (
       <ConfigError
+        corner={corner}
         message={bootstrap.configError.message}
         report={bootstrap.report.sources
           .map(
@@ -305,10 +312,8 @@ export function Overlay() {
   const text = formatCountdown(timer.status, displayMs);
 
   // Flex alignment derived from the current screen corner. The Tauri
-  // host pins the *window* `EDGE_MARGIN` away from the named screen
-  // corner (e.g. bottom-left of the screen → bottom-left of the window
-  // is 24px from the screen's bottom-left); we mirror that anchoring
-  // *inside* the window so the visual content also hugs that edge.
+  // host pins the *window* with `overlay_screen_inset`; `overlayPaddingPx`
+  // applies matching in-window padding so content hugs the same corner.
   // Examples:
   //   topLeft     → contentleft, top      (digits in the window's top-left)
   //   topRight    → contentright, top     (digits in the window's top-right)
@@ -318,6 +323,114 @@ export function Overlay() {
   // digits floating ~80px+ inside whichever screen corner the window
   // was pinned to — which looks like a misaligned overlay.
   const cornerLayout = layoutForCorner(corner);
+  const overlayPadding = overlayPaddingPx(corner);
+  // Bottom corners use flex-end so the last DOM child hugs the screen
+  // edge — ancillary lines must appear *before* the countdown so they sit
+  // above the digits. Top corners use flex-start; canonical order keeps
+  // ancillary below the countdown.
+  const ancillaryAboveDigits =
+    corner === 'bottomLeft' || corner === 'bottomRight';
+  const ancillaryGap = ancillaryAboveDigits
+    ? { marginBottom: 4 }
+    : { marginTop: 4 };
+  const showPaused = timer.status === 'paused';
+  const showBanner = isRunning && Boolean(timer.message);
+  // Single band for paused label + judge message (same chrome); reserve
+  // height even when empty so the countdown does not shift.
+  const ANCILLARY_SLOT_MIN_PX = 20;
+  const ancillaryRowJustify: 'flex-start' | 'flex-end' =
+    corner === 'topLeft' || corner === 'bottomLeft'
+      ? 'flex-start'
+      : 'flex-end';
+  const ancillarySlotStyle = {
+    ...ancillaryGap,
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    justifyContent: ancillaryRowJustify,
+    flexShrink: 0,
+    width: '100%' as const,
+    maxWidth: '100%' as const,
+    boxSizing: 'border-box' as const,
+  };
+
+  const countdownEl = (
+    <span
+      data-testid="countdown"
+      style={{
+        fontFamily: 'Roboto Mono, ui-monospace, monospace',
+        fontSize: '48px',
+        fontWeight: 700,
+        color: style.color,
+        WebkitTextStrokeWidth: 2,
+        WebkitTextStrokeColor: outlineStrokeColor,
+        opacity: digitOpacity,
+        transition: countdownTransition,
+        lineHeight: 1,
+        flexShrink: 0,
+      }}
+    >
+      {text}
+    </span>
+  );
+
+  const pausedSlotEl = (
+    <div
+      data-testid="paused-slot"
+      style={{
+        ...ancillarySlotStyle,
+        minHeight: ANCILLARY_SLOT_MIN_PX,
+      }}
+    >
+      {showPaused || showBanner ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            gap: 4,
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+            background: 'rgba(0,0,0,0.7)',
+            padding: '4px 8px',
+            borderRadius: 4,
+          }}
+        >
+          {showPaused ? (
+            <span
+              data-testid="paused-pill"
+              style={{
+                fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 1,
+                color: '#fff',
+                lineHeight: 1.2,
+              }}
+            >
+              PAUSED
+            </span>
+          ) : null}
+          {showBanner ? (
+            <span
+              data-testid="banner-message"
+              style={{
+                fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#fff',
+                lineHeight: 1.2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {timer.message}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <div
@@ -325,7 +438,7 @@ export function Overlay() {
       data-corner={corner}
       style={{
         opacity,
-        padding: '8px 12px',
+        ...overlayPadding,
         display: 'flex',
         flexDirection: 'column',
         alignItems: cornerLayout.alignItems,
@@ -338,65 +451,27 @@ export function Overlay() {
         userSelect: 'none',
       }}
     >
-      <span
-        data-testid="countdown"
-        style={{
-          fontFamily: 'Roboto Mono, ui-monospace, monospace',
-          fontSize: '48px',
-          fontWeight: 700,
-          color: style.color,
-          WebkitTextStrokeWidth: 2,
-          WebkitTextStrokeColor: outlineStrokeColor,
-          opacity: digitOpacity,
-          transition: countdownTransition,
-          lineHeight: 1,
-        }}
-      >
-        {text}
-      </span>
-      {timer.status === 'paused' && (
-        <span
-          data-testid="paused-pill"
-          style={{
-            marginTop: 4,
-            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: 1,
-            color: '#fff',
-            background: 'rgba(0,0,0,0.7)',
-            padding: '2px 8px',
-            borderRadius: 4,
-          }}
-        >
-          PAUSED
-        </span>
-      )}
-      {isRunning && timer.message && (
-        <span
-          style={{
-            marginTop: 4,
-            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-            fontSize: 11,
-            color: '#fff',
-            WebkitTextStroke: '1px #000',
-            maxWidth: '100%',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {timer.message}
-        </span>
+      {ancillaryAboveDigits ? (
+        <>
+          {pausedSlotEl}
+          {countdownEl}
+        </>
+      ) : (
+        <>
+          {countdownEl}
+          {pausedSlotEl}
+        </>
       )}
     </div>
   );
 }
 
 function ConfigError({
+  corner,
   message,
   report,
 }: {
+  corner: PositionCorner;
   message: string;
   report?: string;
 }) {
@@ -404,7 +479,7 @@ function ConfigError({
     <div
       data-testid="config-error"
       style={{
-        padding: '8px 12px',
+        ...overlayPaddingPx(corner),
         fontFamily: 'ui-sans-serif, system-ui, sans-serif',
         color: '#DC2626',
         fontSize: 14,
