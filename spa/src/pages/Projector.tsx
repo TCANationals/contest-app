@@ -15,7 +15,10 @@ import { useAppStore } from '../store';
  *   • Inverse-color outline on the digits (via CountdownWithBorder).
  *   • Optional message banner below.
  *   • Cursor auto-hide after 3 s stillness.
- *   • Request fullscreen on first click; instruction overlay disappears once entered.
+ *   • Click anywhere (until already fullscreen) to request fullscreen;
+ *     the instruction banner self-dismisses after 30 s, but the click
+ *     handler remains active so the user can still trigger fullscreen.
+ *   • Sub-1-minute pulse is suppressed so the projector stays visually steady.
  *   • A single 16 px connection dot in the bottom-right corner.
  */
 export function ProjectorPage() {
@@ -57,6 +60,13 @@ export function ProjectorPage() {
     return () => document.removeEventListener('fullscreenchange', onChange);
   }, []);
 
+  // Auto-dismiss the "click to enter full screen" hint after 30 s so it
+  // doesn't linger on displays where fullscreen isn't being used.
+  useEffect(() => {
+    const t = window.setTimeout(() => setDismissedInstruction(true), 30_000);
+    return () => window.clearTimeout(t);
+  }, []);
+
   const onEnterFullscreen = () => {
     const el = document.documentElement;
     if (!document.fullscreenElement && el.requestFullscreen) {
@@ -82,7 +92,7 @@ export function ProjectorPage() {
   return (
     <div
       className={`fixed inset-0 bg-black text-white ${hideCursor ? 'no-cursor' : ''}`}
-      onClick={showInstruction ? onEnterFullscreen : undefined}
+      onClick={inFullscreen ? undefined : onEnterFullscreen}
       role="presentation"
     >
       <div className="h-full w-full flex flex-col items-center justify-center gap-6">
@@ -91,6 +101,7 @@ export function ProjectorPage() {
           remainingMs={effectiveRemaining}
           fontSize="min(28vw, 44vh)"
           strokeWidthPx={6}
+          disablePulse
         />
         {status === 'paused' && (
           <span className="text-white uppercase tracking-[0.3em] text-[3vh] bg-white/10 px-6 py-2 rounded-full">

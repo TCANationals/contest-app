@@ -34,6 +34,8 @@ export interface CountdownWithBorderProps {
   remainingMs: number | null;
   /** Optional: force a flashing animation (§9.5.2). */
   flash?: boolean;
+  /** When true, suppress the sub-1-minute 1 Hz pulse animation. */
+  disablePulse?: boolean;
   /** Font size expressed as css units (e.g. '8vw'). */
   fontSize?: string;
   /** Stroke width; default 2 px. */
@@ -64,6 +66,7 @@ export function CountdownWithBorder({
   status,
   remainingMs,
   flash = false,
+  disablePulse = false,
   fontSize = '8vw',
   strokeWidthPx = 2,
   className,
@@ -78,7 +81,7 @@ export function CountdownWithBorder({
     'tabular-nums',
     'leading-none',
     'select-none',
-    pulse ? 'tca-pulse' : '',
+    pulse && !disablePulse ? 'tca-pulse' : '',
     flash ? 'tca-flash' : '',
     className ?? '',
   ]
