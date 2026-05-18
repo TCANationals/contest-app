@@ -1,6 +1,6 @@
 // /contestant WebSocket handler (§5.1, §5.2, §6.3, §6.4, §7).
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 
 import {
@@ -37,10 +37,14 @@ interface ContestantSocketCtx {
 }
 
 export function registerContestantWs(app: FastifyInstance): void {
-  app.get(
-    '/contestant',
-    { websocket: true },
-    async (socket: WebSocket, req: FastifyRequest) => {
+  app.route({
+    method: 'GET',
+    url: '/contestant',
+    // Plain HTTP GETs (curl, browser bar, health probes that don't speak
+    // the WS handshake) get a friendly JSON 426 instead of Fastify's
+    // default "websocket: true" 400/426 boilerplate, which is opaque.
+    handler: (req, reply) => sendUpgradeRequired(req, reply, '/contestant'),
+    wsHandler: async (socket: WebSocket, req: FastifyRequest) => {
       const query = req.query as { key?: string; id?: string };
       const roomKey = query.key ?? '';
       const rawId = query.id ?? '';
@@ -90,7 +94,22 @@ export function registerContestantWs(app: FastifyInstance): void {
 
       socket.on('error', () => {});
     },
-  );
+  });
+}
+
+function sendUpgradeRequired(
+  _req: FastifyRequest,
+  reply: FastifyReply,
+  path: string,
+): void {
+  void reply
+    .code(426)
+    .header('upgrade', 'websocket')
+    .header('connection', 'Upgrade')
+    .send({
+      error: 'upgrade_required',
+      message: `The ${path} endpoint is a WebSocket. Connect with a WebSocket client (ws:// or wss://) instead of plain HTTP.`,
+    });
 }
 
 function handleContestantFrame(

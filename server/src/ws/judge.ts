@@ -1,6 +1,6 @@
 // /judge WebSocket handler (§5.1, §5.2, §6.3, §6.4, §6.5, §7).
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 
 import { ticketCache, hasRoomAccess, type TicketRecord } from '../auth/identity.js';
@@ -39,10 +39,13 @@ interface JudgeSocketCtx {
 }
 
 export function registerJudgeWs(app: FastifyInstance): void {
-  app.get(
-    '/judge',
-    { websocket: true },
-    async (socket: WebSocket, req: FastifyRequest) => {
+  app.route({
+    method: 'GET',
+    url: '/judge',
+    // Plain HTTP GETs get a friendly JSON 426 instead of Fastify's
+    // default opaque "websocket expected" handshake error.
+    handler: (req, reply) => sendUpgradeRequired(req, reply, '/judge'),
+    wsHandler: async (socket: WebSocket, req: FastifyRequest) => {
       const query = req.query as { room?: string; ticket?: string };
       const roomId = query.room ?? '';
       const ticket = query.ticket ?? '';
@@ -92,7 +95,22 @@ export function registerJudgeWs(app: FastifyInstance): void {
 
       socket.on('error', () => {});
     },
-  );
+  });
+}
+
+function sendUpgradeRequired(
+  _req: FastifyRequest,
+  reply: FastifyReply,
+  path: string,
+): void {
+  void reply
+    .code(426)
+    .header('upgrade', 'websocket')
+    .header('connection', 'Upgrade')
+    .send({
+      error: 'upgrade_required',
+      message: `The ${path} endpoint is a WebSocket. Connect with a WebSocket client (ws:// or wss://) instead of plain HTTP.`,
+    });
 }
 
 function handleJudgeFrame(ctx: JudgeSocketCtx, socket: WebSocket, data: Buffer): void {
