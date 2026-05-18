@@ -181,7 +181,13 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
     };
 
     if ('phoneE164' in body) {
-      if (body.phoneE164 == null) {
+      // Treat presence-without-change as a no-op so that saving the
+      // Settings page (which always echoes phone/email back) does not
+      // bounce a `verified` contact back to `pending`.
+      const phoneUnchanged = (body.phoneE164 ?? null) === (existing?.phone_e164 ?? null);
+      if (phoneUnchanged) {
+        // leave phone-related columns untouched
+      } else if (body.phoneE164 == null) {
         updates.phoneE164 = null;
         updates.phoneStatus = 'none';
         updates.pendingPhoneCodeHash = null;
@@ -212,7 +218,10 @@ export function registerJudgeRoutes(app: FastifyInstance): void {
     }
 
     if ('emailAddress' in body) {
-      if (body.emailAddress == null) {
+      const emailUnchanged = (body.emailAddress ?? null) === (existing?.email_address ?? null);
+      if (emailUnchanged) {
+        // leave email-related columns untouched
+      } else if (body.emailAddress == null) {
         updates.emailAddress = null;
         updates.emailStatus = 'none';
         updates.pendingEmailCodeHash = null;
