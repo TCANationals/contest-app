@@ -8,7 +8,11 @@ mod preferences;
 #[cfg(windows)]
 mod windows_tray_promote;
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use app_state::{AppState, Effects};
 use config::{resolve, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
@@ -17,7 +21,6 @@ use preferences::{
     TextSize,
 };
 use serde::Serialize;
-use std::sync::Mutex;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder, TrayIconEvent},
@@ -26,6 +29,7 @@ use tauri::{
 use tca_timer_ipc_server::Handler;
 
 const OVERLAY_LABEL: &str = "overlay";
+const TOPMOST_REASSERT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Gap between the overlay window and the **monitor work-area** edge, in
 /// **logical** pixels. Values are multiplied by the monitor `scale_factor`
@@ -317,6 +321,7 @@ struct TrayMenuControls {
     pos_tr: CheckMenuItem<tauri::Wry>,
     pos_bl: CheckMenuItem<tauri::Wry>,
     pos_br: CheckMenuItem<tauri::Wry>,
+    exit: MenuItem<tauri::Wry>,
 }
 
 /// Apply `corner` to the overlay window using [`overlay_screen_inset`] gaps
@@ -387,10 +392,31 @@ fn apply_visibility(app: &AppHandle, visible: bool) {
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         if visible {
             let _ = w.show();
+            let _ = w.set_always_on_top(true);
         } else {
             let _ = w.hide();
         }
     }
+}
+
+/// Re-assert "always on top" in case the host window manager drops the
+/// z-order flag after shell or monitor transitions.
+fn ensure_overlay_topmost(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
+        let _ = w.set_always_on_top(true);
+    }
+}
+
+/// Polling safety-net that periodically reapplies always-on-top so the
+/// overlay does not drift behind regular windows.
+fn spawn_topmost_watchdog(app: AppHandle) {
+    thread::Builder::new()
+        .name("tca-timer-topmost-watch".into())
+        .spawn(move || loop {
+            ensure_overlay_topmost(&app);
+            thread::sleep(TOPMOST_REASSERT_INTERVAL);
+        })
+        .expect("failed to spawn topmost-watch thread");
 }
 
 /// Shared current-corner state. Written whenever the tray menu reposition
@@ -578,6 +604,8 @@ fn build_tray(
     // menu item to appear at one position in a menu hierarchy, so each
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let exit = MenuItem::with_id(app, "exit-app", "Exit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -588,6 +616,8 @@ fn build_tray(
             &position,
             &text_size_menu,
             &flash_menu,
+            &sep2,
+            &exit,
         ],
     )?;
 
@@ -747,6 +777,7 @@ fn build_tray(
                     });
                     sync_flash();
                 }
+                "exit-app" => app_for_tray.exit(0),
                 _ => {}
             }
         })
@@ -768,6 +799,7 @@ fn build_tray(
         pos_tr,
         pos_bl,
         pos_br,
+        exit,
     })
 }
 
@@ -813,6 +845,8 @@ fn main() {
                     .lock()
                     .expect("current-corner mutex poisoned"),
             );
+            ensure_overlay_topmost(&handle);
+            spawn_topmost_watchdog(handle.clone());
 
             // Poll monitor geometry every 2 s (see `display_watch`) so we
             // re-pin the overlay when resolution / arrangement / DPI
