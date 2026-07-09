@@ -17,16 +17,16 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
-use winreg::RegKey;
+use windows_sys::core::GUID;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{
     FOLDERID_LocalAppData, FOLDERID_ProgramFiles, FOLDERID_ProgramFilesCommon,
     FOLDERID_ProgramFilesCommonX64, FOLDERID_ProgramFilesCommonX86, FOLDERID_ProgramFilesX64,
-    FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+    FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
 };
-use windows_sys::core::GUID;
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+use winreg::RegKey;
 
 /// Dev-only stdout traces (`cargo tauri dev` / debug builds). Release and
 /// `cargo test` stay silent.
@@ -105,7 +105,9 @@ pub fn spawn_promote_tray_icon_for_current_exe() {
             RETRY_SLEEP_MS.len(),
             match last_io_err {
                 Some(e) => format!("last error: {e}"),
-                None => "Explorer never registered a matching ExecutablePath (timing or path mismatch)".to_string(),
+                None =>
+                    "Explorer never registered a matching ExecutablePath (timing or path mismatch)"
+                        .to_string(),
             }
         ));
     });
@@ -159,14 +161,8 @@ fn split_known_folder_executable(raw: &str) -> Option<(String, String)> {
 
 fn get_known_folder_path(folder_id: &GUID) -> Option<PathBuf> {
     let mut pwstr = std::ptr::null_mut();
-    let hr = unsafe {
-        SHGetKnownFolderPath(
-            folder_id,
-            KF_FLAG_DEFAULT,
-            HANDLE::default(),
-            &mut pwstr,
-        )
-    };
+    let hr =
+        unsafe { SHGetKnownFolderPath(folder_id, KF_FLAG_DEFAULT, HANDLE::default(), &mut pwstr) };
     if hr != 0 || pwstr.is_null() {
         return None;
     }

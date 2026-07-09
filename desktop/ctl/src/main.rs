@@ -288,8 +288,7 @@ fn show_toast(title: &str, body: &str) {
 fn try_windows_toast(title: &str, body: &str) -> bool {
     use tauri_winrt_notification::Toast;
 
-    let aumid =
-        std::env::var("TCA_TIMER_TOAST_AUMID").unwrap_or_else(|_| TOAST_AUMID.to_string());
+    let aumid = std::env::var("TCA_TIMER_TOAST_AUMID").unwrap_or_else(|_| TOAST_AUMID.to_string());
     Toast::new(&aumid).title(title).text1(body).show().is_ok()
 }
 
@@ -324,8 +323,7 @@ mod console {
         use std::fs::OpenOptions;
         use std::os::windows::io::IntoRawHandle;
         use windows_sys::Win32::System::Console::{
-            AttachConsole, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
-            STD_OUTPUT_HANDLE,
+            AttachConsole, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
         };
 
         // SAFETY: `AttachConsole` is a Win32 FFI call with no Rust-
@@ -416,11 +414,20 @@ mod tests {
 
     #[test]
     fn known_verbs_dispatch_to_send() {
-        assert_eq!(parse(&["help", "request"]), Action::Send(Request::HelpRequest));
-        assert_eq!(parse(&["help", "cancel"]), Action::Send(Request::HelpCancel));
+        assert_eq!(
+            parse(&["help", "request"]),
+            Action::Send(Request::HelpRequest)
+        );
+        assert_eq!(
+            parse(&["help", "cancel"]),
+            Action::Send(Request::HelpCancel)
+        );
         assert_eq!(parse(&["timer", "show"]), Action::Send(Request::TimerShow));
         assert_eq!(parse(&["timer", "hide"]), Action::Send(Request::TimerHide));
-        assert_eq!(parse(&["timer", "toggle"]), Action::Send(Request::TimerToggle));
+        assert_eq!(
+            parse(&["timer", "toggle"]),
+            Action::Send(Request::TimerToggle)
+        );
         assert_eq!(parse(&["status"]), Action::Send(Request::Status));
     }
 

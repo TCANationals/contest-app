@@ -249,8 +249,7 @@ fn hide_tcatimer_folder_on_windows(dir: &Path) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN,
-        INVALID_FILE_ATTRIBUTES,
+        GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, INVALID_FILE_ATTRIBUTES,
     };
 
     if dir.file_name() != Some(OsStr::new(".tcatimer")) {

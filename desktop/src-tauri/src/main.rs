@@ -437,13 +437,40 @@ fn visibility_menu_label(visible: bool) -> &'static str {
     }
 }
 
-/// Resolved system chrome theme for the overlay window (`Light` / `Dark`).
+/// Resolved system chrome theme for the tray glyph (`Light` / `Dark`).
 /// Falls back to dark so the legacy white-on-alpha tray glyph stays the
 /// default when theme cannot be read.
 fn resolved_tray_theme(app: &AppHandle) -> Theme {
-    app.get_webview_window(OVERLAY_LABEL)
-        .and_then(|w| w.theme().ok())
-        .unwrap_or(Theme::Dark)
+    #[cfg(windows)]
+    {
+        let _ = app;
+        windows_system_theme().unwrap_or(Theme::Dark)
+    }
+
+    #[cfg(not(windows))]
+    {
+        app.get_webview_window(OVERLAY_LABEL)
+            .and_then(|w| w.theme().ok())
+            .unwrap_or(Theme::Dark)
+    }
+}
+
+#[cfg(windows)]
+fn windows_system_theme() -> Option<Theme> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let personalize = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        .ok()?;
+    match personalize
+        .get_value::<u32, _>("SystemUsesLightTheme")
+        .ok()?
+    {
+        0 => Some(Theme::Dark),
+        1 => Some(Theme::Light),
+        _ => None,
+    }
 }
 
 fn tray_image_for_theme(theme: Theme) -> tauri::image::Image<'static> {
@@ -659,13 +686,7 @@ fn build_tray(
                 persist_preferences(&app_for_tray, |prefs| {
                     prefs.position.corner = c;
                 });
-                sync_position_checkmarks(
-                    &pos_tl_tray,
-                    &pos_tr_tray,
-                    &pos_bl_tray,
-                    &pos_br_tray,
-                    c,
-                );
+                sync_position_checkmarks(&pos_tl_tray, &pos_tr_tray, &pos_bl_tray, &pos_br_tray, c);
             };
             let sync_flash = || {
                 if let Ok(g) = app_for_tray.state::<ManagedBootstrap>().0.lock() {
@@ -867,15 +888,18 @@ fn main() {
                 if let Some(ref cmd) = argv {
                     display_watch::run_startup(cmd);
                 }
-                display_watch::start(handle.clone(), display_watch::WatchOptions {
-                    command_argv: argv,
-                    on_monitors_changed: Some(Arc::new(move |app| {
-                        let c = *corner_for_display_watch
-                            .lock()
-                            .expect("current-corner mutex poisoned");
-                        apply_corner(app, c);
-                    })),
-                })
+                display_watch::start(
+                    handle.clone(),
+                    display_watch::WatchOptions {
+                        command_argv: argv,
+                        on_monitors_changed: Some(Arc::new(move |app| {
+                            let c = *corner_for_display_watch
+                                .lock()
+                                .expect("current-corner mutex poisoned");
+                            apply_corner(app, c);
+                        })),
+                    },
+                )
             };
 
             // Tray reposition survives DPI / display events via the
@@ -955,22 +979,28 @@ fn main() {
                 let corner_for_scale = current_corner.clone();
                 let watcher_for_scale = display_watcher.clone();
                 let tray_for_theme = tray_icon_opt.clone();
-                w.on_window_event(move |event| {
-                    match event {
-                        WindowEvent::ScaleFactorChanged { .. } => {
-                            let c = *corner_for_scale
-                                .lock()
-                                .expect("current-corner mutex poisoned");
-                            apply_corner(&handle_for_win, c);
-                            watcher_for_scale.trigger(&handle_for_win);
-                        }
-                        WindowEvent::ThemeChanged(theme) => {
-                            if let Some(tray) = tray_for_theme.as_ref() {
-                                let _ = tray.set_icon(Some(tray_image_for_theme(*theme)));
-                            }
-                        }
-                        _ => {}
+                w.on_window_event(move |event| match event {
+                    WindowEvent::ScaleFactorChanged { .. } => {
+                        let c = *corner_for_scale
+                            .lock()
+                            .expect("current-corner mutex poisoned");
+                        apply_corner(&handle_for_win, c);
+                        watcher_for_scale.trigger(&handle_for_win);
                     }
+                    WindowEvent::ThemeChanged(window_theme) => {
+                        if let Some(tray) = tray_for_theme.as_ref() {
+                            #[cfg(windows)]
+                            let theme = {
+                                let _ = window_theme;
+                                resolved_tray_theme(&handle_for_win)
+                            };
+                            #[cfg(not(windows))]
+                            let theme = *window_theme;
+
+                            let _ = tray.set_icon(Some(tray_image_for_theme(theme)));
+                        }
+                    }
+                    _ => {}
                 });
             }
 

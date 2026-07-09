@@ -709,15 +709,17 @@ mod tests {
             .as_ref()
             .expect("command parsed");
         assert_eq!(cmd.len(), 5);
-        assert_eq!(cmd[0], "C:\\ProgramData\\chocolatey\\lib\\sysinternals\\tools\\Bginfo64.exe");
+        assert_eq!(
+            cmd[0],
+            "C:\\ProgramData\\chocolatey\\lib\\sysinternals\\tools\\Bginfo64.exe"
+        );
         assert_eq!(cmd[4], "/nolicprompt");
     }
 
     #[test]
     fn parse_config_file_accepts_display_change_command_string_shorthand() {
-        let entry = parse_config_file(
-            r#"{"roomKey":"k","displayChangeCommand":"C:\\path\\refresh.exe"}"#,
-        );
+        let entry =
+            parse_config_file(r#"{"roomKey":"k","displayChangeCommand":"C:\\path\\refresh.exe"}"#);
         assert_eq!(
             entry.values.display_change_command.as_deref(),
             Some(&["C:\\path\\refresh.exe".to_string()][..]),
@@ -726,9 +728,8 @@ mod tests {
 
     #[test]
     fn display_change_command_with_empty_program_is_dropped() {
-        let entry = parse_config_file(
-            r#"{"roomKey":"k","displayChangeCommand":["   ", "ignored"]}"#,
-        );
+        let entry =
+            parse_config_file(r#"{"roomKey":"k","displayChangeCommand":["   ", "ignored"]}"#);
         assert!(entry.values.display_change_command.is_none());
     }
 
@@ -757,8 +758,10 @@ mod tests {
             Some(&["bginfo.exe".to_string(), "config.bgi".to_string()][..]),
         );
         // The file source should be reported as having found the field.
-        assert!(report.sources.iter().any(|s| s.source == "file"
-            && s.found.contains(&"displayChangeCommand")));
+        assert!(report
+            .sources
+            .iter()
+            .any(|s| s.source == "file" && s.found.contains(&"displayChangeCommand")));
     }
 
     #[test]

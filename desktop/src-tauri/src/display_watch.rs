@@ -110,7 +110,12 @@ fn snapshot_monitors(app: &AppHandle) -> Option<Vec<MonitorFingerprint>> {
     let fingerprints = monitors
         .iter()
         .map(|m| {
-            MonitorFingerprint::from_parts(m.name().map(String::as_str), *m.position(), *m.size(), m.scale_factor())
+            MonitorFingerprint::from_parts(
+                m.name().map(String::as_str),
+                *m.position(),
+                *m.size(),
+                m.scale_factor(),
+            )
         })
         .collect();
     Some(normalize(fingerprints))
@@ -152,9 +157,7 @@ fn spawn_command(argv: &[String]) {
     // Linux we still emit a debug line so dev builds can confirm the
     // watcher is wired up correctly.
     if let Some(program) = argv.first() {
-        eprintln!(
-            "tca-timer: display-change detected; not spawning {program} (non-Windows host)"
-        );
+        eprintln!("tca-timer: display-change detected; not spawning {program} (non-Windows host)");
     }
 }
 
