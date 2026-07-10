@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build `tca-timer-ctl` and copy the resulting binary into
+ * Build `timer-ctl` and copy the resulting binary into
  * `src-tauri/binaries/` with the `-<target-triple>` suffix Tauri's
  * `bundle.externalBin` sidecar mechanism requires.
  *
@@ -60,7 +60,7 @@ function resolveProfile() {
 
 function buildOneTarget({ triple, profile, useTargetDir }) {
   const cargoArgs = ['build', '--manifest-path', join(desktopRoot, 'Cargo.toml'),
-    '-p', 'tca-timer-ctl'];
+    '-p', 'timer-ctl'];
   if (profile === 'release') cargoArgs.push('--release');
   let buildOutDir = join(desktopRoot, 'target', profile);
   if (useTargetDir) {
@@ -73,7 +73,7 @@ function buildOneTarget({ triple, profile, useTargetDir }) {
 
   const isWindows = triple.includes('windows');
   const exeSuffix = isWindows ? '.exe' : '';
-  const builtBinary = join(buildOutDir, `tca-timer-ctl${exeSuffix}`);
+  const builtBinary = join(buildOutDir, `timer-ctl${exeSuffix}`);
   if (!existsSync(builtBinary)) {
     throw new Error(`expected built binary at ${builtBinary} but it was not produced`);
   }
@@ -90,15 +90,15 @@ function main() {
   console.log(`[build-ctl] profile: ${profile}`);
 
   mkdirSync(binariesDir, { recursive: true });
-  const outBinary = join(binariesDir, `tca-timer-ctl-${triple}${exeSuffix}`);
+  const outBinary = join(binariesDir, `timer-ctl-${triple}${exeSuffix}`);
 
   // `universal-apple-darwin` is not a real rustc target — `cargo build
   // --target universal-apple-darwin` fails. When invoked with
   // `--target universal-apple-darwin`, Tauri builds the desktop crate
   // twice (once per arch) and the `tauri-build` build script checks for a
-  // per-arch sidecar at `binaries/tca-timer-ctl-<arch>-apple-darwin`
+  // per-arch sidecar at `binaries/timer-ctl-<arch>-apple-darwin`
   // before each cargo build proceeds. Then the bundle step looks for a
-  // fat `binaries/tca-timer-ctl-universal-apple-darwin` to copy into the
+  // fat `binaries/timer-ctl-universal-apple-darwin` to copy into the
   // `.app`. Produce all three here so both phases succeed.
   if (triple === 'universal-apple-darwin') {
     const archTriples = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
@@ -109,7 +109,7 @@ function main() {
         profile,
         useTargetDir: true,
       });
-      const archOutBinary = join(binariesDir, `tca-timer-ctl-${archTriple}`);
+      const archOutBinary = join(binariesDir, `timer-ctl-${archTriple}`);
       copyFileSync(builtBinary, archOutBinary);
       const archSize = statSync(archOutBinary).size;
       console.log(`[build-ctl] copied ${builtBinary} -> ${archOutBinary} (${archSize} bytes)`);
