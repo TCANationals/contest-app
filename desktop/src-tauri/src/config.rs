@@ -674,7 +674,7 @@ mod tests {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     fn linux_default_config_path_is_etc_tca_timer() {
         let p = default_config_file_path();
-        assert_eq!(p, std::path::PathBuf::from("/etc/tca-timer/config.json"),);
+        assert_eq!(p, std::path::PathBuf::from("/etc/timer/config.json"),);
     }
 
     #[test]

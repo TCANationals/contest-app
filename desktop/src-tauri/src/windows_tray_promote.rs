@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn split_known_folder_round_trip() {
-        let s = r"{6D809377-6AF0-444B-8957-A3773F02200E}\Timer\tca-timer-desktop.exe";
+        let s = r"{6D809377-6AF0-444B-8957-A3773F02200E}\Timer\timer-desktop.exe";
         let (g, tail) = split_known_folder_executable(s).unwrap();
         assert_eq!(g, "6D809377-6AF0-444B-8957-A3773F02200E");
         assert_eq!(tail, r"Timer\timer-desktop.exe");
