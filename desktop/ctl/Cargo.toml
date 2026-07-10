@@ -1,13 +1,13 @@
 [package]
-name = "tca-timer-ctl"
-description = "Desktop shortcut CLI helper for TCA Timer (§9.6.3)."
+name = "timer-ctl"
+description = "Desktop shortcut CLI helper for Timer."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "tca-timer-ctl"
+name = "timer-ctl"
 path = "src/main.rs"
 
 [dependencies]

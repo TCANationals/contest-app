@@ -361,10 +361,10 @@ mod tests {
 
     #[test]
     fn split_known_folder_round_trip() {
-        let s = r"{6D809377-6AF0-444B-8957-A3773F02200E}\TCA Timer\tca-timer-desktop.exe";
+        let s = r"{6D809377-6AF0-444B-8957-A3773F02200E}\Timer\tca-timer-desktop.exe";
         let (g, tail) = split_known_folder_executable(s).unwrap();
         assert_eq!(g, "6D809377-6AF0-444B-8957-A3773F02200E");
-        assert_eq!(tail, r"TCA Timer\tca-timer-desktop.exe");
+        assert_eq!(tail, r"Timer\timer-desktop.exe");
     }
 
     #[test]
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn synthetic_guid_path_matches_registry_style() {
-        let cn = normalize_compare_path(r"C:\Program Files\TCA Timer\tca-timer-desktop.exe");
+        let cn = normalize_compare_path(r"C:\Program Files\Timer\timer-desktop.exe");
         let bn = normalize_compare_path(r"C:\Program Files");
         let prefix = format!("{bn}\\");
         let rest = cn.strip_prefix(&prefix).unwrap();
@@ -386,7 +386,7 @@ mod tests {
             format_guid_lower(&FOLDERID_ProgramFilesX64)
         ));
         let reg_line = normalize_compare_path(
-            r"{6D809377-6AF0-444B-8957-A3773F02200E}\TCA Timer\tca-timer-desktop.exe",
+            r"{6D809377-6AF0-444B-8957-A3773F02200E}\Timer\timer-desktop.exe",
         );
         assert_eq!(synthetic, reg_line);
     }

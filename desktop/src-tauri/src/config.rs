@@ -9,9 +9,9 @@
 //!    `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`,
 //!    `\DisplayChangeCommand` (`REG_MULTI_SZ` argv list, or `REG_SZ` for a
 //!    single executable path).
-//! 3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
-//!    `/Library/Application Support/TCATimer/config.json` on macOS, and
-//!    `/etc/tca-timer/config.json` on Linux. JSON keys `roomKey`,
+//! 3. Config file: `%PROGRAMDATA%\Timer\config.json` on Windows,
+//!    `/Library/Application Support/Timer/config.json` on macOS, and
+//!    `/etc/timer/config.json` on Linux. JSON keys `roomKey`,
 //!    `server`.
 //! 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`.
 //!
@@ -285,28 +285,28 @@ pub fn read_config_file(path: &std::path::Path) -> SourceEntry {
 
 /// Canonical config file path by platform (§9.4).
 ///
-/// - **Windows:** `%PROGRAMDATA%\TCATimer\config.json`
-///   (`C:\ProgramData\TCATimer\config.json` by default).
-/// - **macOS:** `/Library/Application Support/TCATimer/config.json` —
+/// - **Windows:** `%PROGRAMDATA%\Timer\config.json`
+///   (`C:\ProgramData\Timer\config.json` by default).
+/// - **macOS:** `/Library/Application Support/Timer/config.json` —
 ///   the system-wide "Application Support" location appropriate for a
 ///   venue-provisioned machine.
-/// - **Linux / other Unix:** `/etc/tca-timer/config.json`.
+/// - **Linux / other Unix:** `/etc/timer/config.json`.
 pub fn default_config_file_path() -> PathBuf {
     #[cfg(windows)]
     {
         let programdata =
             std::env::var("ProgramData").unwrap_or_else(|_| "C:/ProgramData".to_string());
         PathBuf::from(programdata)
-            .join("TCATimer")
+            .join("Timer")
             .join("config.json")
     }
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Library/Application Support/TCATimer/config.json")
+        PathBuf::from("/Library/Application Support/Timer/config.json")
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
-        PathBuf::from("/etc/tca-timer/config.json")
+        PathBuf::from("/etc/timer/config.json")
     }
 }
 
@@ -659,7 +659,7 @@ mod tests {
         let p = default_config_file_path();
         assert_eq!(
             p,
-            std::path::PathBuf::from("/Library/Application Support/TCATimer/config.json"),
+            std::path::PathBuf::from("/Library/Application Support/Timer/config.json"),
         );
     }
 
@@ -667,7 +667,7 @@ mod tests {
     #[cfg(windows)]
     fn windows_default_config_path_uses_programdata() {
         let p = default_config_file_path();
-        assert!(p.ends_with("TCATimer/config.json") || p.ends_with("TCATimer\\config.json"));
+        assert!(p.ends_with("Timer/config.json") || p.ends_with("Timer\\config.json"));
     }
 
     #[test]

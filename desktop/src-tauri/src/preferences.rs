@@ -252,7 +252,7 @@ fn hide_tcatimer_folder_on_windows(dir: &Path) {
         GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, INVALID_FILE_ATTRIBUTES,
     };
 
-    if dir.file_name() != Some(OsStr::new(".tcatimer")) {
+    if dir.file_name() != Some(OsStr::new(".timer")) {
         return;
     }
 
@@ -274,13 +274,13 @@ pub fn default_preferences_path() -> Option<PathBuf> {
     {
         std::env::var("USERPROFILE")
             .ok()
-            .map(|p| PathBuf::from(p).join(".tcatimer").join("preferences.json"))
+            .map(|p| PathBuf::from(p).join(".timer").join("preferences.json"))
     }
     #[cfg(not(windows))]
     {
         std::env::var("HOME")
             .ok()
-            .map(|p| PathBuf::from(p).join(".tcatimer").join("preferences.json"))
+            .map(|p| PathBuf::from(p).join(".timer").join("preferences.json"))
     }
 }
 

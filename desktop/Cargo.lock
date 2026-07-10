@@ -3845,16 +3845,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tca-timer-ctl"
-version = "0.0.1"
-dependencies = [
- "interprocess",
- "tauri-winrt-notification",
- "tca-timer-ipc-proto",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "tca-timer-desktop"
 version = "0.0.1"
 dependencies = [
@@ -3989,6 +3979,16 @@ checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "timer-ctl"
+version = "0.0.1"
+dependencies = [
+ "interprocess",
+ "tauri-winrt-notification",
+ "tca-timer-ipc-proto",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -20,7 +20,7 @@
 //! - Sends exactly one JSON request line, reads one JSON response line,
 //!   exits in well under 500 ms total.
 //! - On any connection failure surfaces a toast via
-//!   [`show_toast`]: "TCA Timer is not running." and exits with code 2.
+//!   [`show_toast`]: "Timer is not running." and exits with code 2.
 //! - Built as a Windows GUI subsystem binary so no console window flashes
 //!   when launched from a desktop shortcut. To still get textual output
 //!   when launched from cmd/PowerShell, we call
@@ -47,10 +47,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 /// keeping them in lockstep means `parse_args` can stay the single
 /// source of truth for the supported verbs.
 const USAGE: &str = "\
-tca-timer-ctl — local control helper for the TCA Timer desktop app.
+timer-ctl — local control helper for the Timer desktop app.
 
 USAGE:
-    tca-timer-ctl <command> [args]
+    timer-ctl <command> [args]
 
 COMMANDS:
     help request      Raise a help request for this contestant.
@@ -65,7 +65,7 @@ OPTIONS:
 
 EXIT CODES:
     0   Command succeeded.
-    2   The TCA Timer desktop app is not running on the local IPC socket.
+    2   The Timer desktop app is not running on the local IPC socket.
     64  Unrecognised command. Run with --help for the supported verbs.
 ";
 
@@ -117,12 +117,12 @@ fn main() -> ExitCode {
             // on stderr just like any other CLI.
             if has_console {
                 let argv = args.join(" ");
-                eprintln!("tca-timer-ctl: unknown command: {argv}\n");
+                eprintln!("timer-ctl: unknown command: {argv}\n");
                 eprintln!("{USAGE}");
             } else {
                 show_toast(
-                    "TCA Timer",
-                    "Unknown command.\nUsage: tca-timer-ctl help|timer|status ...",
+                    "Timer",
+                    "Unknown command.\nUsage: timer-ctl help|timer|status ...",
                 );
             }
             ExitCode::from(64)
@@ -134,8 +134,8 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(err) => {
-                let body = format!("TCA Timer is not running. ({err})");
-                emit(has_console, "TCA Timer", &body, true);
+                let body = format!("Timer is not running. ({err})");
+                emit(has_console, "Timer", &body, true);
                 ExitCode::from(2)
             }
         },
@@ -209,7 +209,7 @@ fn send(req: &Request) -> std::io::Result<Response> {
 fn format_response(req: &Request, res: &Response) -> (&'static str, String) {
     match (req, res) {
         (_, Response::HelpRequested { status }) => (
-            "TCA Timer",
+            "Timer",
             match status {
                 HelpRequestStatus::Requested => "Help requested.".to_string(),
                 HelpRequestStatus::AlreadyPending => "Help is already pending.".to_string(),
@@ -219,14 +219,14 @@ fn format_response(req: &Request, res: &Response) -> (&'static str, String) {
             },
         ),
         (_, Response::HelpCancelled { status }) => (
-            "TCA Timer",
+            "Timer",
             match status {
                 HelpCancelStatus::Cancelled => "Help request cancelled.".to_string(),
                 HelpCancelStatus::NotPending => "No help request was pending.".to_string(),
             },
         ),
         (_, Response::TimerVisibility { visible }) => (
-            "TCA Timer",
+            "Timer",
             if *visible {
                 "Timer shown.".to_string()
             } else {
@@ -234,13 +234,13 @@ fn format_response(req: &Request, res: &Response) -> (&'static str, String) {
             },
         ),
         (_, Response::Status(s)) => (
-            "TCA Timer status",
+            "Timer status",
             format!(
                 "connected={} visible={} help_pending={}",
                 s.connected, s.visible, s.help_pending
             ),
         ),
-        (_, Response::Error { code, message }) => ("TCA Timer", format!("Error {code}: {message}")),
+        (_, Response::Error { code, message }) => ("Timer", format!("Error {code}: {message}")),
     }
 }
 
@@ -248,8 +248,8 @@ fn format_response(req: &Request, res: &Response) -> (&'static str, String) {
 /// surfaced. Must match the AUMID Tauri's NSIS installer assigns to
 /// the desktop app's Start Menu shortcut (which it derives from
 /// `bundle.identifier` in `tauri.conf.json`); using the same value
-/// here means toasts from `tca-timer-ctl` appear in the same
-/// "TCA Timer" channel as toasts from the main app — same icon,
+/// here means toasts from `timer-ctl` appear in the same
+/// "Timer" channel as toasts from the main app — same icon,
 /// same Action Center grouping. Override at runtime with
 /// `TCA_TIMER_TOAST_AUMID=...` for dev / packaging variants.
 #[cfg(windows)]

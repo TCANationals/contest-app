@@ -137,7 +137,7 @@ fn bootstrap() -> Bootstrap {
     {
         if let Err(err) = write_atomic(p, &outcome.preferences) {
             eprintln!(
-                "tca-timer: failed to write preferences to {}: {err}",
+                "timer: failed to write preferences to {}: {err}",
                 p.display()
             );
         }
@@ -237,7 +237,7 @@ fn persist_preferences(app: &AppHandle, patch: impl FnOnce(&mut Preferences)) {
         let mut guard = match state.0.lock() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("tca-timer: bootstrap mutex poisoned, cannot save preferences: {e}");
+                eprintln!("timer: bootstrap mutex poisoned, cannot save preferences: {e}");
                 return;
             }
         };
@@ -246,7 +246,7 @@ fn persist_preferences(app: &AppHandle, patch: impl FnOnce(&mut Preferences)) {
         if let Some(p) = guard.prefs_path.as_deref() {
             if let Err(err) = write_atomic(p, &guard.prefs) {
                 eprintln!(
-                    "tca-timer: failed to write preferences to {}: {err}",
+                    "timer: failed to write preferences to {}: {err}",
                     p.display()
                 );
             }
@@ -411,7 +411,7 @@ fn ensure_overlay_topmost(app: &AppHandle) {
 /// overlay does not drift behind regular windows.
 fn spawn_topmost_watchdog(app: AppHandle) {
     thread::Builder::new()
-        .name("tca-timer-topmost-watch".into())
+        .name("timer-topmost-watch".into())
         .spawn(move || loop {
             ensure_overlay_topmost(&app);
             thread::sleep(TOPMOST_REASSERT_INTERVAL);
@@ -674,7 +674,7 @@ fn build_tray(
         .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .tooltip("TCA Timer")
+        .tooltip("Timer")
         .on_menu_event(move |_icon, event| {
             let id = event.id().0.as_str();
             let reposition = |c: Corner, label: &'static str| {
@@ -963,7 +963,7 @@ fn main() {
             ) {
                 Ok(c) => Some(c),
                 Err(err) => {
-                    eprintln!("tca-timer: tray init failed: {err}");
+                    eprintln!("timer: tray init failed: {err}");
                     None
                 }
             };
@@ -1013,7 +1013,7 @@ fn main() {
                 handle.listen("overlay:set-visible", move |event| {
                     let visible: bool = serde_json::from_str(event.payload()).unwrap_or(true);
                     if let Err(err) = item.set_text(visibility_menu_label(visible)) {
-                        eprintln!("tca-timer: failed to update visibility menu label: {err}",);
+                        eprintln!("timer: failed to update visibility menu label: {err}",);
                     }
                 });
             }
@@ -1036,7 +1036,7 @@ fn main() {
                 state_for_pending.mark_help_pending(pending);
             });
 
-            eprintln!("tca-timer: preferences {}", prefs_action_log);
+            eprintln!("timer: preferences {}", prefs_action_log);
             Ok(())
         })
         .build(tauri::generate_context!())

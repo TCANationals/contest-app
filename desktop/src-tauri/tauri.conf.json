@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TCA Timer",
+  "productName": "Timer",
   "version": "0.1.1",
   "identifier": "com.tcanationals.timer",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "overlay",
-        "title": "TCA Timer",
+        "title": "Timer",
         "width": 400,
         "height": 96,
         "resizable": false,
@@ -43,7 +43,7 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "externalBin": ["binaries/tca-timer-ctl"],
+    "externalBin": ["binaries/timer-ctl"],
     "macOS": {
       "minimumSystemVersion": "11.0"
     },

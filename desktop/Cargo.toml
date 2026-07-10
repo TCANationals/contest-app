@@ -6,7 +6,7 @@ members = ["ipc-proto", "ipc-server", "ctl", "src-tauri"]
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
-authors = ["TCANationals"]
+authors = ["Timer"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

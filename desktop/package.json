@@ -2,7 +2,7 @@
   "name": "tca-timer-desktop",
   "version": "0.0.1",
   "private": true,
-  "description": "TCA Timer contestant overlay — Tauri 2 (scaffolding).",
+  "description": "Timer contestant overlay — Tauri 2 (scaffolding).",
   "type": "module",
   "scripts": {
     "dev": "vite",
