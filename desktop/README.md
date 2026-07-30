@@ -36,20 +36,27 @@ Cargo.toml           Rust workspace covering src-tauri, ipc-proto, and ctl.
 
 ## Configuration (§9.4)
 
-The overlay resolves `roomKey` and `serverHost` at launch from the first
-non-empty source per key, in priority order:
+The overlay resolves `roomKey`, `serverHost`, and the global `hideExit`
+preference at launch from the first source per key, in priority order:
 
-1. Command-line flags: `--room-key <key>`, `--server <host>`.
-2. Windows registry: `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server` (REG_SZ).
-3. Config file: `%PROGRAMDATA%\TCATimer\config.json` on Windows,
-   `/Library/Application Support/TCATimer/config.json` on macOS, and
-   `/etc/tca-timer/config.json` on Linux. JSON keys: `roomKey`, `server`.
-4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`.
+1. Command-line flags: `--room-key <key>`, `--server <host>`,
+   `--hide-exit[=<bool>]`.
+2. Windows registry: `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`
+   (REG_SZ), `\HideExit` (REG_DWORD, `0` or `1`).
+3. Config file: `%PROGRAMDATA%\Timer\config.json` on Windows,
+   `/Library/Application Support/Timer/config.json` on macOS, and
+   `/etc/timer/config.json` on Linux. JSON keys: `roomKey`, `server`,
+   `hideExit` (boolean).
+4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`,
+   `TCA_TIMER_HIDE_EXIT`.
 
 `serverHost` defaults to **`timer.tcanationals.com`** when no source supplies
 one. `roomKey` has no default — if it is missing, the overlay shows a
 red "Configuration error" banner listing each tried source and does NOT
-attempt to connect.
+attempt to connect. `hideExit` defaults to `false`; when true, the tray
+context menu omits both the Exit item and its separator on every platform.
+The CLI and environment forms accept `true`/`false`, `1`/`0`, `yes`/`no`,
+or `on`/`off`; a bare `--hide-exit` means true.
 
 The room key is a plaintext high-entropy random string that identifies
 and authenticates a room in a single value — the server reads it
@@ -136,11 +143,11 @@ The overlay is primarily deployed on Windows 11 x64 VMs (§9.1), but the
 codebase also builds and runs on macOS and Linux so contributors on those
 platforms can hack on it locally without a Windows VM.
 
-| Platform | Config file                                         | Preferences file                      | IPC transport                          |
-| :------- | :-------------------------------------------------- | :------------------------------------ | :------------------------------------- |
-| Windows  | `%PROGRAMDATA%\TCATimer\config.json`                | `%USERPROFILE%\.tcatimer\...`         | Named pipe (scoped per session + user) |
-| macOS    | `/Library/Application Support/TCATimer/config.json` | `~/.tcatimer/preferences.json`        | Unix domain socket (`/tmp/tca-timer-<user>/tca-timer.sock`) |
-| Linux    | `/etc/tca-timer/config.json`                        | `~/.tcatimer/preferences.json`        | Unix domain socket (`$XDG_RUNTIME_DIR/tca-timer.sock` or `/tmp/...`) |
+| Platform | Config file                                      | Preferences file                      | IPC transport                          |
+| :------- | :----------------------------------------------- | :------------------------------------ | :------------------------------------- |
+| Windows  | `%PROGRAMDATA%\Timer\config.json`                | `%USERPROFILE%\.tcatimer\...`         | Named pipe (scoped per session + user) |
+| macOS    | `/Library/Application Support/Timer/config.json` | `~/.tcatimer/preferences.json`        | Unix domain socket (`/tmp/tca-timer-<user>/tca-timer.sock`) |
+| Linux    | `/etc/timer/config.json`                         | `~/.tcatimer/preferences.json`        | Unix domain socket (`$XDG_RUNTIME_DIR/tca-timer.sock` or `/tmp/...`) |
 
 On macOS the app runs as an "Accessory" (agent) activation policy — no
 Dock icon, no menu-bar takeover — mirroring `skipTaskbar` on Windows.

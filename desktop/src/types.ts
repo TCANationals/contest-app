@@ -27,6 +27,8 @@ export interface Preferences {
 export interface DesktopConfig {
   roomKey: string;
   serverHost: string;
+  /** Global kiosk setting; consumed by the native tray shell. */
+  hideExit: boolean;
   // Windows-only: optional argv to invoke whenever the display
   // configuration changes. Mirrors the BgInfo refresh hook from the
   // legacy Electron app. Omitted from the payload when the config does

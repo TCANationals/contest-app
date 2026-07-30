@@ -15,7 +15,7 @@ use std::{
 };
 
 use app_state::{AppState, Effects};
-use config::{resolve, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
+use config::{resolve, resolve_hide_exit, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
 use preferences::{
     load_from_path, write_atomic, Corner, DisplayPrefs, FlashPrefs, LoadAction, Preferences,
     TextSize,
@@ -108,6 +108,7 @@ struct Bootstrap {
     config: Option<DesktopConfig>,
     report: ConfigReport,
     config_error: Option<ConfigError>,
+    hide_exit: bool,
     prefs: Preferences,
     prefs_action: LoadAction,
     prefs_path: Option<std::path::PathBuf>,
@@ -116,6 +117,7 @@ struct Bootstrap {
 fn bootstrap() -> Bootstrap {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let sources = ConfigSources::live(&argv);
+    let hide_exit = resolve_hide_exit(&sources);
     let (cfg, report, cfg_err) = match resolve(&sources) {
         Ok((c, r)) => (Some(c), r, None),
         Err(err) => (None, err.report.clone(), Some(err)),
@@ -147,6 +149,7 @@ fn bootstrap() -> Bootstrap {
         config: cfg,
         report,
         config_error: cfg_err,
+        hide_exit,
         prefs: outcome.preferences,
         prefs_action: outcome.action,
         prefs_path,
@@ -321,7 +324,7 @@ struct TrayMenuControls {
     pos_tr: CheckMenuItem<tauri::Wry>,
     pos_bl: CheckMenuItem<tauri::Wry>,
     pos_br: CheckMenuItem<tauri::Wry>,
-    exit: MenuItem<tauri::Wry>,
+    exit: Option<MenuItem<tauri::Wry>>,
 }
 
 /// Apply `corner` to the overlay window using [`overlay_screen_inset`] gaps
@@ -487,6 +490,7 @@ fn build_tray(
     state: AppState,
     initial_visible: bool,
     prefs: &Preferences,
+    hide_exit: bool,
 ) -> tauri::Result<TrayMenuControls> {
     // A single toggle item that flips between "Show" and "Hide" based on
     // the current overlay visibility. Displaying both at once (the old
@@ -631,22 +635,48 @@ fn build_tray(
     // menu item to appear at one position in a menu hierarchy, so each
     // separator needs its own instance.
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
-    let exit = MenuItem::with_id(app, "exit-app", "Exit", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &visibility,
-            &sep1,
-            &alarm,
-            &status_color,
-            &position,
-            &text_size_menu,
-            &flash_menu,
-            &sep2,
-            &exit,
-        ],
-    )?;
+    let exit = if hide_exit {
+        None
+    } else {
+        Some(MenuItem::with_id(
+            app,
+            "exit-app",
+            "Exit",
+            true,
+            None::<&str>,
+        )?)
+    };
+    let menu = match exit.as_ref() {
+        Some(exit) => {
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            Menu::with_items(
+                app,
+                &[
+                    &visibility,
+                    &sep1,
+                    &alarm,
+                    &status_color,
+                    &position,
+                    &text_size_menu,
+                    &flash_menu,
+                    &sep2,
+                    exit,
+                ],
+            )?
+        }
+        None => Menu::with_items(
+            app,
+            &[
+                &visibility,
+                &sep1,
+                &alarm,
+                &status_color,
+                &position,
+                &text_size_menu,
+                &flash_menu,
+            ],
+        )?,
+    };
 
     let app_for_tray = app.clone();
     let corner_for_tray = current_corner.clone();
@@ -827,6 +857,7 @@ fn build_tray(
 fn main() {
     let b = bootstrap();
     let initial_visible = !b.prefs.hidden;
+    let hide_exit = b.hide_exit;
     let current_corner: CurrentCorner = Arc::new(Mutex::new(b.prefs.position.corner));
     let prefs_action_log = format!("{:?}", b.prefs_action);
 
@@ -960,6 +991,7 @@ fn main() {
                 state.clone(),
                 initial_visible,
                 &prefs_for_tray,
+                hide_exit,
             ) {
                 Ok(c) => Some(c),
                 Err(err) => {

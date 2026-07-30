@@ -1,19 +1,23 @@
 //! Desktop configuration resolution (§9.4).
 //!
-//! At launch, the overlay resolves `roomKey` and `serverHost` by
+//! At launch, the overlay resolves `roomKey`, `serverHost`, and global
+//! preferences such as `hideExit` by
 //! checking these sources in priority order, picking the first source
-//! that supplies a non-empty value for each key independently:
+//! that supplies a value for each key independently:
 //!
-//! 1. Command-line flags: `--room-key <key>`, `--server <host>`.
+//! 1. Command-line flags: `--room-key <key>`, `--server <host>`,
+//!    `--hide-exit[=<bool>]`.
 //! 2. Windows registry (production):
 //!    `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`,
+//!    `\HideExit` (`REG_DWORD`),
 //!    `\DisplayChangeCommand` (`REG_MULTI_SZ` argv list, or `REG_SZ` for a
 //!    single executable path).
 //! 3. Config file: `%PROGRAMDATA%\Timer\config.json` on Windows,
 //!    `/Library/Application Support/Timer/config.json` on macOS, and
-//!    `/etc/timer/config.json` on Linux. JSON keys `roomKey`,
-//!    `server`.
-//! 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`.
+//!    `/etc/timer/config.json` on Linux. JSON keys `roomKey`, `server`,
+//!    `hideExit`.
+//! 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`,
+//!    `TCA_TIMER_HIDE_EXIT`.
 //!
 //! `roomKey` has no default — if no source supplies it, the overlay
 //! renders a "Configuration error" banner instead of attempting a
@@ -38,6 +42,8 @@ pub const DEFAULT_SERVER_HOST: &str = "timer.tcanationals.com";
 pub struct DesktopConfig {
     pub room_key: String,
     pub server_host: String,
+    /// Hide the tray menu's Exit item for managed/kiosk deployments.
+    pub hide_exit: bool,
     /// Optional command line to invoke whenever the Windows display
     /// configuration changes (resolution, DPI, monitor add/remove). The
     /// first element is the program; remaining elements are arguments.
@@ -75,8 +81,8 @@ pub struct ConfigReport {
     pub default_server_host: &'static str,
 }
 
-/// Per-source outcome entry. `found` lists the keys (`roomKey`,
-/// `server`) that this specific source actually supplied.
+/// Per-source outcome entry. `found` lists the keys (`roomKey`, `server`,
+/// `hideExit`, and `displayChangeCommand`) that this source supplied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceOutcome {
@@ -114,6 +120,7 @@ impl std::error::Error for ConfigError {}
 pub struct SourceValues {
     pub room_key: Option<String>,
     pub server: Option<String>,
+    pub hide_exit: Option<bool>,
     pub display_change_command: Option<Vec<String>>,
 }
 
@@ -140,6 +147,7 @@ impl SourceValues {
         Self {
             room_key: Self::nonempty(self.room_key),
             server: Self::nonempty(self.server),
+            hide_exit: self.hide_exit,
             display_change_command: Self::normalize_argv(self.display_change_command),
         }
     }
@@ -151,6 +159,9 @@ impl SourceValues {
         }
         if self.server.is_some() {
             v.push("server");
+        }
+        if self.hide_exit.is_some() {
+            v.push("hideExit");
         }
         if self.display_change_command.is_some() {
             v.push("displayChangeCommand");
@@ -182,6 +193,7 @@ impl SourceEntry {
         let normalized = values.normalize();
         let available = normalized.room_key.is_some()
             || normalized.server.is_some()
+            || normalized.hide_exit.is_some()
             || normalized.display_change_command.is_some();
         Self {
             available,
@@ -196,18 +208,33 @@ impl SourceEntry {
 /// — the overlay is routinely launched with other platform-specific args.
 pub fn parse_cli_args(argv: &[String]) -> SourceEntry {
     let mut values = SourceValues::default();
-    let mut iter = argv.iter();
+    let mut iter = argv.iter().peekable();
     while let Some(arg) = iter.next() {
         let (flag, inline_value) = split_flag(arg);
-        let slot: &mut Option<String> = match flag {
-            "--room-key" => &mut values.room_key,
-            "--server" | "--server-host" => &mut values.server,
-            _ => continue,
-        };
-        if let Some(v) = inline_value {
-            *slot = Some(v.to_owned());
-        } else if let Some(next) = iter.next() {
-            *slot = Some(next.clone());
+        match flag {
+            "--room-key" => {
+                values.room_key = inline_value
+                    .map(str::to_owned)
+                    .or_else(|| iter.next().cloned());
+            }
+            "--server" | "--server-host" => {
+                values.server = inline_value
+                    .map(str::to_owned)
+                    .or_else(|| iter.next().cloned());
+            }
+            "--hide-exit" => {
+                values.hide_exit = match inline_value {
+                    Some(raw) => parse_bool(raw),
+                    None => match iter.peek().and_then(|next| parse_bool(next)) {
+                        Some(value) => {
+                            let _ = iter.next();
+                            Some(value)
+                        }
+                        None => Some(true),
+                    },
+                };
+            }
+            _ => {}
         }
     }
     SourceEntry::from_values(values)
@@ -217,6 +244,14 @@ fn split_flag(arg: &str) -> (&str, Option<&str>) {
     match arg.split_once('=') {
         Some((flag, value)) => (flag, Some(value)),
         None => (arg, None),
+    }
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -250,12 +285,14 @@ pub fn parse_config_file(contents: &str) -> SourceEntry {
     struct FileShape {
         room_key: Option<String>,
         server: Option<String>,
+        hide_exit: Option<bool>,
         display_change_command: Option<DisplayCommandShape>,
     }
     match serde_json::from_str::<FileShape>(contents) {
         Ok(shape) => SourceEntry::from_values(SourceValues {
             room_key: shape.room_key,
             server: shape.server,
+            hide_exit: shape.hide_exit,
             display_change_command: shape.display_change_command.map(|c| c.into_argv()),
         }),
         Err(err) => SourceEntry {
@@ -296,9 +333,7 @@ pub fn default_config_file_path() -> PathBuf {
     {
         let programdata =
             std::env::var("ProgramData").unwrap_or_else(|_| "C:/ProgramData".to_string());
-        PathBuf::from(programdata)
-            .join("Timer")
-            .join("config.json")
+        PathBuf::from(programdata).join("Timer").join("config.json")
     }
     #[cfg(target_os = "macos")]
     {
@@ -364,6 +399,10 @@ fn read_registry_windows() -> std::io::Result<SourceValues> {
             Ok(SourceValues {
                 room_key: get("RoomKey"),
                 server: get("Server"),
+                hide_exit: key
+                    .get_value::<u32, _>("HideExit")
+                    .ok()
+                    .map(|value| value != 0),
                 display_change_command: display_change_command_from_registry(&key),
             })
         }
@@ -377,6 +416,9 @@ pub fn read_env() -> SourceEntry {
     SourceEntry::from_values(SourceValues {
         room_key: std::env::var("TCA_TIMER_ROOM_KEY").ok(),
         server: std::env::var("TCA_TIMER_SERVER").ok(),
+        hide_exit: std::env::var("TCA_TIMER_HIDE_EXIT")
+            .ok()
+            .and_then(|value| parse_bool(&value)),
         display_change_command: None,
     })
 }
@@ -408,6 +450,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
 
     let mut room_key: Option<String> = None;
     let mut server: Option<String> = None;
+    let hide_exit = resolve_hide_exit(sources);
     let mut display_change_command: Option<Vec<String>> = None;
 
     let mut outcomes = Vec::with_capacity(ordered.len());
@@ -453,10 +496,21 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
         DesktopConfig {
             room_key: room_key.expect("roomKey present"),
             server_host: server.unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned()),
+            hide_exit,
             display_change_command,
         },
         report,
     ))
+}
+
+/// Resolve the optional kiosk-style tray preference independently so it
+/// remains effective even when a missing room key puts the app into its
+/// configuration-error state.
+pub fn resolve_hide_exit(sources: &ConfigSources) -> bool {
+    [&sources.cli, &sources.registry, &sources.file, &sources.env]
+        .into_iter()
+        .find_map(|entry| entry.values.hide_exit)
+        .unwrap_or(false)
 }
 
 #[allow(dead_code)]
@@ -487,6 +541,7 @@ mod tests {
         SourceValues {
             room_key: opt(key),
             server: opt(server),
+            hide_exit: None,
             display_change_command: None,
         }
     }
@@ -508,6 +563,7 @@ mod tests {
         let (cfg, _) = resolve(&sources).expect("resolves");
         assert_eq!(cfg.server_host, "timer.tcanationals.com");
         assert_eq!(cfg.room_key, "key-abcdef0123456789");
+        assert!(!cfg.hide_exit);
     }
 
     #[test]
@@ -606,6 +662,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_cli_accepts_bare_and_explicit_hide_exit_values() {
+        let bare = parse_cli_args(&["--hide-exit".to_string()]);
+        assert_eq!(bare.values.hide_exit, Some(true));
+
+        let equals = parse_cli_args(&["--hide-exit=false".to_string()]);
+        assert_eq!(equals.values.hide_exit, Some(false));
+
+        let spaced = parse_cli_args(&["--hide-exit".to_string(), "off".to_string()]);
+        assert_eq!(spaced.values.hide_exit, Some(false));
+    }
+
+    #[test]
     fn parse_cli_ignores_unknown_flags() {
         let entry = parse_cli_args(&[
             "--weird".to_string(),
@@ -622,14 +690,50 @@ mod tests {
     #[test]
     fn parse_config_file_accepts_all_keys_and_ignores_extras() {
         let entry = parse_config_file(
-            r#"{"roomKey":"k1-0123456789abcdef","server":"s.example","ignored":42}"#,
+            r#"{"roomKey":"k1-0123456789abcdef","server":"s.example","hideExit":true,"ignored":42}"#,
         );
         assert_eq!(
             entry.values.room_key.as_deref(),
             Some("k1-0123456789abcdef"),
         );
         assert_eq!(entry.values.server.as_deref(), Some("s.example"));
+        assert_eq!(entry.values.hide_exit, Some(true));
         assert!(entry.note.is_none());
+    }
+
+    #[test]
+    fn explicit_false_hide_exit_wins_over_lower_priority_true() {
+        let sources = ConfigSources {
+            cli: SourceEntry::from_values(SourceValues {
+                room_key: Some("k".to_string()),
+                hide_exit: Some(false),
+                ..Default::default()
+            }),
+            file: SourceEntry::from_values(SourceValues {
+                hide_exit: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (cfg, report) = resolve(&sources).unwrap();
+        assert!(!cfg.hide_exit);
+        assert_eq!(report.sources[0].found, vec!["roomKey", "hideExit"]);
+        assert_eq!(report.sources[2].found, vec!["hideExit"]);
+    }
+
+    #[test]
+    fn hide_exit_resolves_even_when_room_key_is_missing() {
+        let sources = ConfigSources {
+            file: SourceEntry::from_values(SourceValues {
+                hide_exit: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(resolve(&sources).is_err());
+        assert!(resolve_hide_exit(&sources));
     }
 
     #[test]
@@ -644,6 +748,7 @@ mod tests {
         let cfg = DesktopConfig {
             room_key: "hunter2-key-0123456789".to_string(),
             server_host: "timer.tcanationals.com".to_string(),
+            hide_exit: false,
             display_change_command: None,
         };
         let url = cfg.contestant_ws_url("contestant-07");
@@ -682,6 +787,7 @@ mod tests {
         let cfg = DesktopConfig {
             room_key: "a b".to_string(),
             server_host: "h".to_string(),
+            hide_exit: false,
             display_change_command: None,
         };
         let url = cfg.contestant_ws_url("user@domain");
@@ -741,6 +847,7 @@ mod tests {
             file: SourceEntry::from_values(SourceValues {
                 room_key: None,
                 server: None,
+                hide_exit: None,
                 display_change_command: Some(vec![
                     "bginfo.exe".to_string(),
                     "config.bgi".to_string(),
@@ -749,6 +856,7 @@ mod tests {
             env: SourceEntry::from_values(SourceValues {
                 room_key: None,
                 server: None,
+                hide_exit: None,
                 display_change_command: Some(vec!["wrong.exe".to_string()]),
             }),
         };
