@@ -1,23 +1,23 @@
 //! Desktop configuration resolution (§9.4).
 //!
 //! At launch, the overlay resolves `roomKey`, `serverHost`, and global
-//! preferences such as `hideExit` by
+//! preferences such as `hideExit` and `defaultPosition` by
 //! checking these sources in priority order, picking the first source
 //! that supplies a value for each key independently:
 //!
 //! 1. Command-line flags: `--room-key <key>`, `--server <host>`,
-//!    `--hide-exit[=<bool>]`.
+//!    `--hide-exit[=<bool>]`, `--default-position <corner>`.
 //! 2. Windows registry (production):
 //!    `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`,
-//!    `\HideExit` (`REG_DWORD`),
+//!    `\HideExit` (`REG_DWORD`), `\DefaultPosition` (`REG_SZ`),
 //!    `\DisplayChangeCommand` (`REG_MULTI_SZ` argv list, or `REG_SZ` for a
 //!    single executable path).
 //! 3. Config file: `%PROGRAMDATA%\Timer\config.json` on Windows,
 //!    `/Library/Application Support/Timer/config.json` on macOS, and
 //!    `/etc/timer/config.json` on Linux. JSON keys `roomKey`, `server`,
-//!    `hideExit`.
+//!    `hideExit`, `defaultPosition`.
 //! 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`,
-//!    `TCA_TIMER_HIDE_EXIT`.
+//!    `TCA_TIMER_HIDE_EXIT`, `TCA_TIMER_DEFAULT_POSITION`.
 //!
 //! `roomKey` has no default — if no source supplies it, the overlay
 //! renders a "Configuration error" banner instead of attempting a
@@ -32,6 +32,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::preferences::Corner;
+
 /// Fallback server host when no source supplies one. The user can override
 /// it via any of the sources in [`ConfigSources`] at runtime.
 pub const DEFAULT_SERVER_HOST: &str = "timer.tcanationals.com";
@@ -44,6 +46,9 @@ pub struct DesktopConfig {
     pub server_host: String,
     /// Hide the tray menu's Exit item for managed/kiosk deployments.
     pub hide_exit: bool,
+    /// Machine-wide initial corner. A valid per-user preferences file
+    /// remains authoritative over this value.
+    pub default_position: Corner,
     /// Optional command line to invoke whenever the Windows display
     /// configuration changes (resolution, DPI, monitor add/remove). The
     /// first element is the program; remaining elements are arguments.
@@ -82,7 +87,8 @@ pub struct ConfigReport {
 }
 
 /// Per-source outcome entry. `found` lists the keys (`roomKey`, `server`,
-/// `hideExit`, and `displayChangeCommand`) that this source supplied.
+/// `hideExit`, `defaultPosition`, and `displayChangeCommand`) that this
+/// source supplied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceOutcome {
@@ -121,6 +127,7 @@ pub struct SourceValues {
     pub room_key: Option<String>,
     pub server: Option<String>,
     pub hide_exit: Option<bool>,
+    pub default_position: Option<Corner>,
     pub display_change_command: Option<Vec<String>>,
 }
 
@@ -148,6 +155,7 @@ impl SourceValues {
             room_key: Self::nonempty(self.room_key),
             server: Self::nonempty(self.server),
             hide_exit: self.hide_exit,
+            default_position: self.default_position,
             display_change_command: Self::normalize_argv(self.display_change_command),
         }
     }
@@ -162,6 +170,9 @@ impl SourceValues {
         }
         if self.hide_exit.is_some() {
             v.push("hideExit");
+        }
+        if self.default_position.is_some() {
+            v.push("defaultPosition");
         }
         if self.display_change_command.is_some() {
             v.push("displayChangeCommand");
@@ -194,6 +205,7 @@ impl SourceEntry {
         let available = normalized.room_key.is_some()
             || normalized.server.is_some()
             || normalized.hide_exit.is_some()
+            || normalized.default_position.is_some()
             || normalized.display_change_command.is_some();
         Self {
             available,
@@ -234,6 +246,11 @@ pub fn parse_cli_args(argv: &[String]) -> SourceEntry {
                     },
                 };
             }
+            "--default-position" => {
+                values.default_position = inline_value
+                    .or_else(|| iter.next().map(String::as_str))
+                    .and_then(parse_corner);
+            }
             _ => {}
         }
     }
@@ -251,6 +268,16 @@ fn parse_bool(raw: &str) -> Option<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
         "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_corner(raw: &str) -> Option<Corner> {
+    match raw.trim() {
+        "topLeft" => Some(Corner::TopLeft),
+        "topRight" => Some(Corner::TopRight),
+        "bottomLeft" => Some(Corner::BottomLeft),
+        "bottomRight" => Some(Corner::BottomRight),
         _ => None,
     }
 }
@@ -286,6 +313,7 @@ pub fn parse_config_file(contents: &str) -> SourceEntry {
         room_key: Option<String>,
         server: Option<String>,
         hide_exit: Option<bool>,
+        default_position: Option<Corner>,
         display_change_command: Option<DisplayCommandShape>,
     }
     match serde_json::from_str::<FileShape>(contents) {
@@ -293,6 +321,7 @@ pub fn parse_config_file(contents: &str) -> SourceEntry {
             room_key: shape.room_key,
             server: shape.server,
             hide_exit: shape.hide_exit,
+            default_position: shape.default_position,
             display_change_command: shape.display_change_command.map(|c| c.into_argv()),
         }),
         Err(err) => SourceEntry {
@@ -403,6 +432,7 @@ fn read_registry_windows() -> std::io::Result<SourceValues> {
                     .get_value::<u32, _>("HideExit")
                     .ok()
                     .map(|value| value != 0),
+                default_position: get("DefaultPosition").as_deref().and_then(parse_corner),
                 display_change_command: display_change_command_from_registry(&key),
             })
         }
@@ -419,6 +449,10 @@ pub fn read_env() -> SourceEntry {
         hide_exit: std::env::var("TCA_TIMER_HIDE_EXIT")
             .ok()
             .and_then(|value| parse_bool(&value)),
+        default_position: std::env::var("TCA_TIMER_DEFAULT_POSITION")
+            .ok()
+            .as_deref()
+            .and_then(parse_corner),
         display_change_command: None,
     })
 }
@@ -451,6 +485,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
     let mut room_key: Option<String> = None;
     let mut server: Option<String> = None;
     let hide_exit = resolve_hide_exit(sources);
+    let default_position = resolve_default_position(sources);
     let mut display_change_command: Option<Vec<String>> = None;
 
     let mut outcomes = Vec::with_capacity(ordered.len());
@@ -497,6 +532,7 @@ pub fn resolve(sources: &ConfigSources) -> Result<(DesktopConfig, ConfigReport),
             room_key: room_key.expect("roomKey present"),
             server_host: server.unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned()),
             hide_exit,
+            default_position,
             display_change_command,
         },
         report,
@@ -511,6 +547,16 @@ pub fn resolve_hide_exit(sources: &ConfigSources) -> bool {
         .into_iter()
         .find_map(|entry| entry.values.hide_exit)
         .unwrap_or(false)
+}
+
+/// Resolve the machine-wide initial overlay corner independently so it is
+/// still honored when a missing room key puts the app in its configuration
+/// error state. A loaded per-user preference is applied later and wins.
+pub fn resolve_default_position(sources: &ConfigSources) -> Corner {
+    [&sources.cli, &sources.registry, &sources.file, &sources.env]
+        .into_iter()
+        .find_map(|entry| entry.values.default_position)
+        .unwrap_or(Corner::BottomRight)
 }
 
 #[allow(dead_code)]
@@ -542,6 +588,7 @@ mod tests {
             room_key: opt(key),
             server: opt(server),
             hide_exit: None,
+            default_position: None,
             display_change_command: None,
         }
     }
@@ -662,6 +709,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_cli_accepts_default_position() {
+        let entry = parse_cli_args(&["--default-position=topLeft".to_string()]);
+        assert_eq!(entry.values.default_position, Some(Corner::TopLeft));
+
+        let entry = parse_cli_args(&["--default-position".to_string(), "bottomLeft".to_string()]);
+        assert_eq!(entry.values.default_position, Some(Corner::BottomLeft));
+    }
+
+    #[test]
     fn parse_cli_accepts_bare_and_explicit_hide_exit_values() {
         let bare = parse_cli_args(&["--hide-exit".to_string()]);
         assert_eq!(bare.values.hide_exit, Some(true));
@@ -690,7 +746,7 @@ mod tests {
     #[test]
     fn parse_config_file_accepts_all_keys_and_ignores_extras() {
         let entry = parse_config_file(
-            r#"{"roomKey":"k1-0123456789abcdef","server":"s.example","hideExit":true,"ignored":42}"#,
+            r#"{"roomKey":"k1-0123456789abcdef","server":"s.example","hideExit":true,"defaultPosition":"topRight","ignored":42}"#,
         );
         assert_eq!(
             entry.values.room_key.as_deref(),
@@ -698,6 +754,7 @@ mod tests {
         );
         assert_eq!(entry.values.server.as_deref(), Some("s.example"));
         assert_eq!(entry.values.hide_exit, Some(true));
+        assert_eq!(entry.values.default_position, Some(Corner::TopRight));
         assert!(entry.note.is_none());
     }
 
@@ -749,6 +806,7 @@ mod tests {
             room_key: "hunter2-key-0123456789".to_string(),
             server_host: "timer.tcanationals.com".to_string(),
             hide_exit: false,
+            default_position: Corner::BottomRight,
             display_change_command: None,
         };
         let url = cfg.contestant_ws_url("contestant-07");
@@ -788,6 +846,7 @@ mod tests {
             room_key: "a b".to_string(),
             server_host: "h".to_string(),
             hide_exit: false,
+            default_position: Corner::BottomRight,
             display_change_command: None,
         };
         let url = cfg.contestant_ws_url("user@domain");
@@ -848,6 +907,7 @@ mod tests {
                 room_key: None,
                 server: None,
                 hide_exit: None,
+                default_position: None,
                 display_change_command: Some(vec![
                     "bginfo.exe".to_string(),
                     "config.bgi".to_string(),
@@ -857,6 +917,7 @@ mod tests {
                 room_key: None,
                 server: None,
                 hide_exit: None,
+                default_position: None,
                 display_change_command: Some(vec!["wrong.exe".to_string()]),
             }),
         };
@@ -880,5 +941,31 @@ mod tests {
         };
         let (cfg, _) = resolve(&sources).unwrap();
         assert!(cfg.display_change_command.is_none());
+    }
+
+    #[test]
+    fn default_position_uses_per_key_priority_and_falls_back_to_bottom_right() {
+        let sources = ConfigSources {
+            cli: SourceEntry::from_values(vals("k", "")),
+            registry: SourceEntry::from_values(SourceValues {
+                default_position: Some(Corner::TopLeft),
+                ..Default::default()
+            }),
+            file: SourceEntry::from_values(SourceValues {
+                default_position: Some(Corner::BottomLeft),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (cfg, report) = resolve(&sources).unwrap();
+        assert_eq!(cfg.default_position, Corner::TopLeft);
+        assert_eq!(resolve_default_position(&sources), Corner::TopLeft);
+        assert!(report.sources[1].found.contains(&"defaultPosition"));
+
+        assert_eq!(
+            resolve_default_position(&ConfigSources::default()),
+            Corner::BottomRight
+        );
     }
 }

@@ -36,19 +36,21 @@ Cargo.toml           Rust workspace covering src-tauri, ipc-proto, and ctl.
 
 ## Configuration (§9.4)
 
-The overlay resolves `roomKey`, `serverHost`, and the global `hideExit`
-preference at launch from the first source per key, in priority order:
+The overlay resolves `roomKey`, `serverHost`, the global `hideExit`
+preference, and `defaultPosition` at launch from the first source per key,
+in priority order:
 
 1. Command-line flags: `--room-key <key>`, `--server <host>`,
-   `--hide-exit[=<bool>]`.
+   `--hide-exit[=<bool>]`, `--default-position <corner>`.
 2. Windows registry: `HKLM\Software\TCANationals\Timer\RoomKey`, `\Server`
-   (REG_SZ), `\HideExit` (REG_DWORD, `0` or `1`).
+   (REG_SZ), `\HideExit` (REG_DWORD, `0` or `1`), `\DefaultPosition`
+   (REG_SZ).
 3. Config file: `%PROGRAMDATA%\Timer\config.json` on Windows,
    `/Library/Application Support/Timer/config.json` on macOS, and
    `/etc/timer/config.json` on Linux. JSON keys: `roomKey`, `server`,
-   `hideExit` (boolean).
+   `hideExit` (boolean), `defaultPosition` (string).
 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`,
-   `TCA_TIMER_HIDE_EXIT`.
+   `TCA_TIMER_HIDE_EXIT`, `TCA_TIMER_DEFAULT_POSITION`.
 
 `serverHost` defaults to **`timer.tcanationals.com`** when no source supplies
 one. `roomKey` has no default — if it is missing, the overlay shows a
@@ -57,6 +59,11 @@ attempt to connect. `hideExit` defaults to `false`; when true, the tray
 context menu omits both the Exit item and its separator on every platform.
 The CLI and environment forms accept `true`/`false`, `1`/`0`, `yes`/`no`,
 or `on`/`off`; a bare `--hide-exit` means true.
+
+`defaultPosition` accepts `topLeft`, `topRight`, `bottomLeft`, or
+`bottomRight`, and defaults to `bottomRight`. It seeds the overlay position
+when no usable per-user preferences file exists. A corner saved in the
+user's `preferences.json` always takes precedence.
 
 The room key is a plaintext high-entropy random string that identifies
 and authenticates a room in a single value — the server reads it

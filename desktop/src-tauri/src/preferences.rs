@@ -151,6 +151,20 @@ pub enum LoadAction {
     Migrated { from: u32 },
 }
 
+/// Apply the machine-wide initial corner only when no usable per-user
+/// preference was loaded. Once preferences exist (including after a
+/// migration), the user's saved corner remains authoritative.
+pub fn apply_default_corner(outcome: &mut LoadOutcome, corner: Corner) {
+    if matches!(
+        outcome.action,
+        LoadAction::CreatedDefaults
+            | LoadAction::FallbackMalformed { .. }
+            | LoadAction::FallbackNewer { .. }
+    ) {
+        outcome.preferences.position.corner = corner;
+    }
+}
+
 /// Load preferences from `path`, applying the §9.5.3 error-handling rules.
 ///
 /// Always returns a valid `Preferences`. The `action` signals the caller.
@@ -321,6 +335,28 @@ mod tests {
         let out = load_from_path(&path);
         assert!(matches!(out.action, LoadAction::CreatedDefaults));
         assert_eq!(out.preferences, Preferences::default());
+    }
+
+    #[test]
+    fn system_default_corner_only_applies_without_usable_user_preferences() {
+        let mut missing = LoadOutcome {
+            preferences: Preferences::default(),
+            action: LoadAction::CreatedDefaults,
+        };
+        apply_default_corner(&mut missing, Corner::TopLeft);
+        assert_eq!(missing.preferences.position.corner, Corner::TopLeft);
+
+        let mut loaded = LoadOutcome {
+            preferences: Preferences {
+                position: PositionPrefs {
+                    corner: Corner::BottomLeft,
+                },
+                ..Preferences::default()
+            },
+            action: LoadAction::Loaded,
+        };
+        apply_default_corner(&mut loaded, Corner::TopRight);
+        assert_eq!(loaded.preferences.position.corner, Corner::BottomLeft);
     }
 
     #[test]

@@ -15,10 +15,13 @@ use std::{
 };
 
 use app_state::{AppState, Effects};
-use config::{resolve, resolve_hide_exit, ConfigError, ConfigReport, ConfigSources, DesktopConfig};
+use config::{
+    resolve, resolve_default_position, resolve_hide_exit, ConfigError, ConfigReport, ConfigSources,
+    DesktopConfig,
+};
 use preferences::{
-    load_from_path, write_atomic, Corner, DisplayPrefs, FlashPrefs, LoadAction, Preferences,
-    TextSize,
+    apply_default_corner, load_from_path, write_atomic, Corner, DisplayPrefs, FlashPrefs,
+    LoadAction, Preferences, TextSize,
 };
 use serde::Serialize;
 use tauri::{
@@ -118,13 +121,14 @@ fn bootstrap() -> Bootstrap {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let sources = ConfigSources::live(&argv);
     let hide_exit = resolve_hide_exit(&sources);
+    let default_position = resolve_default_position(&sources);
     let (cfg, report, cfg_err) = match resolve(&sources) {
         Ok((c, r)) => (Some(c), r, None),
         Err(err) => (None, err.report.clone(), Some(err)),
     };
 
     let prefs_path = preferences::default_preferences_path();
-    let outcome = match prefs_path.as_deref() {
+    let mut outcome = match prefs_path.as_deref() {
         Some(p) => load_from_path(p),
         None => preferences::LoadOutcome {
             preferences: Preferences::default(),
@@ -133,6 +137,7 @@ fn bootstrap() -> Bootstrap {
             },
         },
     };
+    apply_default_corner(&mut outcome, default_position);
 
     if let (Some(p), LoadAction::CreatedDefaults | LoadAction::Migrated { .. }) =
         (prefs_path.as_deref(), &outcome.action)
