@@ -455,11 +455,54 @@ fn resolved_tray_theme(app: &AppHandle) -> Theme {
         windows_system_theme().unwrap_or(Theme::Dark)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let window_theme = app
+            .get_webview_window(OVERLAY_LABEL)
+            .and_then(|w| w.theme().ok())
+            .unwrap_or(Theme::Dark);
+        linux_panel_theme(
+            window_theme,
+            std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+            std::env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
+        )
+    }
+
+    #[cfg(all(not(windows), not(target_os = "linux")))]
     {
         app.get_webview_window(OVERLAY_LABEL)
             .and_then(|w| w.theme().ok())
             .unwrap_or(Theme::Dark)
+    }
+}
+
+/// GNOME Shell's top panel uses dark chrome even when GTK/WebKit windows
+/// report a light theme. Ubuntu 24's default desktop identifies itself as
+/// `ubuntu:GNOME`, so following the window theme there selects a nearly
+/// invisible black glyph. Other Linux desktops retain their reported
+/// window theme because their panels can follow it.
+#[cfg(any(target_os = "linux", test))]
+fn linux_panel_theme(
+    window_theme: Theme,
+    current_desktop: Option<&str>,
+    session_desktop: Option<&str>,
+) -> Theme {
+    let has_dark_shell_panel = [current_desktop, session_desktop]
+        .into_iter()
+        .flatten()
+        .any(|value| {
+            value.split([':', ';']).map(str::trim).any(|name| {
+                matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "gnome" | "ubuntu" | "unity"
+                )
+            })
+        });
+
+    if has_dark_shell_panel {
+        Theme::Dark
+    } else {
+        window_theme
     }
 }
 
@@ -1026,12 +1069,12 @@ fn main() {
                     }
                     WindowEvent::ThemeChanged(window_theme) => {
                         if let Some(tray) = tray_for_theme.as_ref() {
-                            #[cfg(windows)]
+                            #[cfg(any(windows, target_os = "linux"))]
                             let theme = {
                                 let _ = window_theme;
                                 resolved_tray_theme(&handle_for_win)
                             };
-                            #[cfg(not(windows))]
+                            #[cfg(all(not(windows), not(target_os = "linux")))]
                             let theme = *window_theme;
 
                             let _ = tray.set_icon(Some(tray_image_for_theme(theme)));
@@ -1083,4 +1126,24 @@ fn main() {
                 // nothing to clean up beyond what Tauri does
             }
         });
+}
+
+#[cfg(test)]
+mod tray_theme_tests {
+    use super::*;
+
+    #[test]
+    fn ubuntu_gnome_uses_a_light_glyph_even_in_light_app_mode() {
+        let theme = linux_panel_theme(Theme::Light, Some("ubuntu:GNOME"), Some("ubuntu"));
+        assert!(matches!(theme, Theme::Dark));
+    }
+
+    #[test]
+    fn other_linux_desktops_keep_the_reported_theme() {
+        let light = linux_panel_theme(Theme::Light, Some("KDE"), Some("plasma"));
+        assert!(matches!(light, Theme::Light));
+
+        let dark = linux_panel_theme(Theme::Dark, None, None);
+        assert!(matches!(dark, Theme::Dark));
+    }
 }
