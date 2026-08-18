@@ -4,6 +4,7 @@ import {
   OVERLAY_SCREEN_INSET_LARGE,
   OVERLAY_SCREEN_INSET_MEDIUM,
   OVERLAY_SCREEN_INSET_SMALL,
+  bottomContentCompensationPx,
   overlayPaddingPx,
   overlayScreenInsetForTextSize,
 } from '../src/overlayScreenInset';
@@ -48,5 +49,19 @@ describe('overlayPaddingPx', () => {
       expect(overlayPaddingPx('bottomLeft', size).paddingBottom).toBe(0);
       expect(overlayPaddingPx('bottomRight', size).paddingBottom).toBe(0);
     }
+  });
+});
+
+describe('bottomContentCompensationPx', () => {
+  it('applies the clamped Linux small-tier delta at bottom corners', () => {
+    expect(bottomContentCompensationPx('bottomLeft', 'small', true)).toBe(19);
+    expect(bottomContentCompensationPx('bottomRight', 'small', true)).toBe(19);
+  });
+
+  it('leaves the medium baseline, large native offset, top, and other OSes alone', () => {
+    expect(bottomContentCompensationPx('bottomRight', 'medium', true)).toBe(0);
+    expect(bottomContentCompensationPx('bottomRight', 'large', true)).toBe(0);
+    expect(bottomContentCompensationPx('topRight', 'small', true)).toBe(0);
+    expect(bottomContentCompensationPx('bottomRight', 'small', false)).toBe(0);
   });
 });

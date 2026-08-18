@@ -165,9 +165,12 @@ window positioning. This is required for exact corner anchoring. An explicit
 `GDK_BACKEND` value is preserved; on a pure-Wayland system the compositor
 controls placement. The window uses fixed 400×96 min/max constraints while
 remaining natively resizable; setting GTK 3's resizable flag to false causes
-it to replace the requested 96 px overlay height with a 200 px minimum. Bottom
-positions use a zero vertical screen inset and zero bottom content padding so
-startup and tray-driven repositioning both remain flush with the display edge.
+it to replace the requested 96 px overlay height with a 200 px minimum. Linux
+bottom placement preserves the established size-tier differences relative to
+medium. Medium keeps a 0 px offset, Large uses a 23 px native offset, and Small
+shifts its WebView content down 19 px because Mutter clamps negative native
+window offsets. Together these compensate for the fixed WebView's 46/27/6 px
+internal whitespace without changing the correct medium tier.
 If GTK has not mapped the window during startup, positioning falls back to the
 primary monitor and is reasserted during the first second after mapping so
 right-side positions consistently keep their 15 px inset. Corner calculations

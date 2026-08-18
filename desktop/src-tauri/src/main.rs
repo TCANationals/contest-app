@@ -53,6 +53,8 @@ const STARTUP_POSITION_REASSERT_DELAYS: [Duration; 3] = [
 mod overlay_screen_inset {
     use crate::preferences::TextSize;
 
+    const MEDIUM_BOTTOM_BASELINE: f64 = 35.0;
+
     #[derive(Clone, Copy)]
     pub struct CornerInsets {
         pub top_left_x: f64,
@@ -65,18 +67,18 @@ mod overlay_screen_inset {
         pub bottom_right_y: f64,
     }
 
-    /// Bottom corners stay flush with the display edge. GTK can report the
-    /// monitor only after initial window creation, so non-zero bottom insets
-    /// made tray-driven repositioning disagree with the startup placement.
+    /// Raw values preserve the established Windows size-tier spacing. Linux
+    /// normalizes bottom values around the medium tier in `for_text_size` to
+    /// compensate for the fixed WebView's inverse size-dependent whitespace.
     const SMALL: CornerInsets = CornerInsets {
         top_left_x: 12.0,
         top_left_y: 4.0,
         top_right_x: 15.0,
         top_right_y: 4.0,
         bottom_left_x: 12.0,
-        bottom_left_y: 0.0,
+        bottom_left_y: 16.0,
         bottom_right_x: 15.0,
-        bottom_right_y: 0.0,
+        bottom_right_y: 16.0,
     };
 
     /// Default tray tier — historical baseline.
@@ -86,9 +88,9 @@ mod overlay_screen_inset {
         top_right_x: 15.0,
         top_right_y: 5.0,
         bottom_left_x: 15.0,
-        bottom_left_y: 0.0,
+        bottom_left_y: 35.0,
         bottom_right_x: 15.0,
-        bottom_right_y: 0.0,
+        bottom_right_y: 35.0,
     };
 
     /// Larger typography → more clearance from bezels / taskbar bands.
@@ -98,16 +100,42 @@ mod overlay_screen_inset {
         top_right_x: 15.0,
         top_right_y: 0.0,
         bottom_left_x: 15.0,
-        bottom_left_y: 0.0,
+        bottom_left_y: 58.0,
         bottom_right_x: 15.0,
-        bottom_right_y: 0.0,
+        bottom_right_y: 58.0,
     };
 
+    fn linux_bottom_inset(raw_inset: f64) -> f64 {
+        // Mutter clamps windows that extend below the display, so the small
+        // tier's -19 px delta is applied inside the WebView instead. Native
+        // placement handles only non-negative compensation.
+        (raw_inset - MEDIUM_BOTTOM_BASELINE).max(0.0)
+    }
+
     pub fn for_text_size(size: TextSize) -> CornerInsets {
-        match size {
+        let mut insets = match size {
             TextSize::Small => SMALL,
             TextSize::Medium => MEDIUM,
             TextSize::Large => LARGE,
+        };
+
+        if cfg!(target_os = "linux") {
+            insets.bottom_left_y = linux_bottom_inset(insets.bottom_left_y);
+            insets.bottom_right_y = linux_bottom_inset(insets.bottom_right_y);
+        }
+
+        insets
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn linux_bottom_insets_preserve_tier_deltas_around_medium() {
+            assert_eq!(linux_bottom_inset(SMALL.bottom_right_y), 0.0);
+            assert_eq!(linux_bottom_inset(MEDIUM.bottom_right_y), 0.0);
+            assert_eq!(linux_bottom_inset(LARGE.bottom_right_y), 23.0);
         }
     }
 }

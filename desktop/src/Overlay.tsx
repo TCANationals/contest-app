@@ -11,7 +11,10 @@ import {
 } from '@tca-timer/shared';
 
 import { layoutForCorner } from './layout';
-import { overlayPaddingPx } from './overlayScreenInset';
+import {
+  bottomContentCompensationPx,
+  overlayPaddingPx,
+} from './overlayScreenInset';
 import {
   ancillaryBandMinPx,
   bannerMessageFontPx,
@@ -333,6 +336,11 @@ export function Overlay() {
   const overlayTextSize = overlayTextSizeFromPrefs(prefs?.display.textSize);
   const cornerLayout = layoutForCorner(corner);
   const overlayPadding = overlayPaddingPx(corner, overlayTextSize);
+  const bottomContentCompensation = bottomContentCompensationPx(
+    corner,
+    overlayTextSize,
+    navigator.userAgent.includes('Linux'),
+  );
   // Bottom corners use flex-end so the last DOM child hugs the screen
   // edge — ancillary lines must appear *before* the countdown so they sit
   // above the digits. Top corners use flex-start; canonical order keeps
@@ -456,6 +464,10 @@ export function Overlay() {
         width: '100%',
         height: '100%',
         boxSizing: 'border-box',
+        transform:
+          bottomContentCompensation === 0
+            ? undefined
+            : `translateY(${bottomContentCompensation}px)`,
         pointerEvents: 'none',
         userSelect: 'none',
       }}

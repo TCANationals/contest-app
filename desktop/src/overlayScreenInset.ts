@@ -2,9 +2,9 @@ import type { OverlayTextSize } from './overlayTextSize';
 import type { PositionCorner } from './types';
 
 /**
- * In-window padding that mirrors `overlay_screen_inset` in
- * `src-tauri/src/main.rs`. Values are **logical px**; Tauri scales window
- * placement by DPI, the WebView uses CSS px.
+ * In-window padding in CSS px. Native screen placement is handled separately
+ * by `overlay_screen_inset` in `src-tauri/src/main.rs`; on Linux that layer
+ * applies per-tier bottom compensation while these bottom values remain zero.
  *
  * Three tiers follow `display.textSize`. Edit these tables to tune offsets.
  *
@@ -68,6 +68,20 @@ export function overlayScreenInsetForTextSize(
     default:
       return OVERLAY_SCREEN_INSET_MEDIUM;
   }
+}
+
+/**
+ * Mutter will not place the small overlay 19 px beyond the bottom edge, so
+ * Linux applies that tier's negative relative offset to the content instead.
+ * Medium is the unchanged baseline; Large is compensated by native placement.
+ */
+export function bottomContentCompensationPx(
+  corner: PositionCorner,
+  textSize: OverlayTextSize,
+  isLinux: boolean,
+): number {
+  const isBottom = corner === 'bottomLeft' || corner === 'bottomRight';
+  return isLinux && isBottom && textSize === 'small' ? 19 : 0;
 }
 
 export function overlayPaddingPx(
