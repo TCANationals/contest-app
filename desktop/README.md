@@ -159,6 +159,12 @@ platforms can hack on it locally without a Windows VM.
 On macOS the app runs as an "Accessory" (agent) activation policy — no
 Dock icon, no menu-bar takeover — mirroring `skipTaskbar` on Windows.
 
+On Linux, the app defaults GTK to X11/XWayland when an X display is
+available because native Wayland does not support absolute application
+window positioning. This is required for exact corner anchoring. An explicit
+`GDK_BACKEND` value is preserved; on a pure-Wayland system the compositor
+controls placement.
+
 ### Linux system deps for Tauri
 
 On Linux the Tauri crate needs the system libs below; the Desktop CI job

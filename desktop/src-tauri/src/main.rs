@@ -506,6 +506,32 @@ fn linux_panel_theme(
     }
 }
 
+/// Tauri/tao cannot set an absolute top-left window position on native
+/// Wayland. This overlay requires exact corner anchoring, so on Linux we
+/// default GTK to X11/XWayland whenever an X display is available. An
+/// explicit `GDK_BACKEND` remains authoritative, and pure-Wayland systems
+/// still start normally (with compositor-controlled placement).
+#[cfg(any(target_os = "linux", test))]
+fn linux_backend_override(
+    gdk_backend_is_set: bool,
+    x11_display_is_available: bool,
+) -> Option<&'static str> {
+    (!gdk_backend_is_set && x11_display_is_available).then_some("x11")
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_display_backend() {
+    if let Some(backend) = linux_backend_override(
+        std::env::var_os("GDK_BACKEND").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+    ) {
+        // This runs as the first operation in `main`, before Tauri/GTK or
+        // any worker threads are initialized.
+        std::env::set_var("GDK_BACKEND", backend);
+        eprintln!("timer: using GTK X11 backend for precise overlay positioning");
+    }
+}
+
 #[cfg(windows)]
 fn windows_system_theme() -> Option<Theme> {
     use winreg::enums::HKEY_CURRENT_USER;
@@ -903,6 +929,9 @@ fn build_tray(
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    configure_linux_display_backend();
+
     let b = bootstrap();
     let initial_visible = !b.prefs.hidden;
     let hide_exit = b.hide_exit;
@@ -1145,5 +1174,12 @@ mod tray_theme_tests {
 
         let dark = linux_panel_theme(Theme::Dark, None, None);
         assert!(matches!(dark, Theme::Dark));
+    }
+
+    #[test]
+    fn linux_prefers_x11_only_when_available_and_not_explicitly_configured() {
+        assert_eq!(linux_backend_override(false, true), Some("x11"));
+        assert_eq!(linux_backend_override(true, true), None);
+        assert_eq!(linux_backend_override(false, false), None);
     }
 }
