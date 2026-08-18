@@ -4,6 +4,7 @@ import {
   OVERLAY_SCREEN_INSET_LARGE,
   OVERLAY_SCREEN_INSET_MEDIUM,
   OVERLAY_SCREEN_INSET_SMALL,
+  bottomContentCompensationPx,
   overlayPaddingPx,
   overlayScreenInsetForTextSize,
 } from '../src/overlayScreenInset';
@@ -21,13 +22,15 @@ describe('overlayScreenInsetForTextSize', () => {
     );
   });
 
-  it('orders bottom-edge padding small ≤ medium ≤ large', () => {
-    expect(OVERLAY_SCREEN_INSET_SMALL.BOTTOM_RIGHT_Y).toBeLessThanOrEqual(
-      OVERLAY_SCREEN_INSET_MEDIUM.BOTTOM_RIGHT_Y,
-    );
-    expect(OVERLAY_SCREEN_INSET_MEDIUM.BOTTOM_RIGHT_Y).toBeLessThanOrEqual(
-      OVERLAY_SCREEN_INSET_LARGE.BOTTOM_RIGHT_Y,
-    );
+  it('keeps every bottom position flush across text-size tiers', () => {
+    for (const inset of [
+      OVERLAY_SCREEN_INSET_SMALL,
+      OVERLAY_SCREEN_INSET_MEDIUM,
+      OVERLAY_SCREEN_INSET_LARGE,
+    ]) {
+      expect(inset.BOTTOM_LEFT_Y).toBe(0);
+      expect(inset.BOTTOM_RIGHT_Y).toBe(0);
+    }
   });
 });
 
@@ -41,9 +44,26 @@ describe('overlayPaddingPx', () => {
     });
   });
 
-  it('scales bottom-right padding by tier', () => {
-    const small = overlayPaddingPx('bottomRight', 'small');
-    const large = overlayPaddingPx('bottomRight', 'large');
-    expect(small.paddingBottom).toBeLessThan(large.paddingBottom);
+  it('does not add in-window padding to bottom positions', () => {
+    for (const size of ['small', 'medium', 'large'] as const) {
+      expect(overlayPaddingPx('bottomLeft', size).paddingBottom).toBe(0);
+      expect(overlayPaddingPx('bottomRight', size).paddingBottom).toBe(0);
+    }
+  });
+});
+
+describe('bottomContentCompensationPx', () => {
+  it('equalizes the visible Linux bottom and side gaps at bottom corners', () => {
+    expect(bottomContentCompensationPx('bottomLeft', 'small', true)).toBe(30);
+    expect(bottomContentCompensationPx('bottomRight', 'small', true)).toBe(30);
+    expect(bottomContentCompensationPx('bottomLeft', 'medium', true)).toBe(11);
+    expect(bottomContentCompensationPx('bottomRight', 'medium', true)).toBe(11);
+  });
+
+  it('leaves the large native offset, top, and other OSes alone', () => {
+    expect(bottomContentCompensationPx('bottomRight', 'large', true)).toBe(0);
+    expect(bottomContentCompensationPx('topRight', 'small', true)).toBe(0);
+    expect(bottomContentCompensationPx('bottomRight', 'small', false)).toBe(0);
+    expect(bottomContentCompensationPx('bottomRight', 'medium', false)).toBe(0);
   });
 });

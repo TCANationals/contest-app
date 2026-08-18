@@ -2,9 +2,9 @@ import type { OverlayTextSize } from './overlayTextSize';
 import type { PositionCorner } from './types';
 
 /**
- * In-window padding that mirrors `overlay_screen_inset` in
- * `src-tauri/src/main.rs`. Values are **logical px**; Tauri scales window
- * placement by DPI, the WebView uses CSS px.
+ * In-window padding in CSS px. Native screen placement is handled separately
+ * by `overlay_screen_inset` in `src-tauri/src/main.rs`; on Linux that layer
+ * applies per-tier bottom compensation while these bottom values remain zero.
  *
  * Three tiers follow `display.textSize`. Edit these tables to tune offsets.
  *
@@ -18,9 +18,9 @@ export const OVERLAY_SCREEN_INSET_SMALL = {
   TOP_RIGHT_X: 0,
   TOP_RIGHT_Y: 4,
   BOTTOM_LEFT_X: 0,
-  BOTTOM_LEFT_Y: 16,
+  BOTTOM_LEFT_Y: 0,
   BOTTOM_RIGHT_X: 0,
-  BOTTOM_RIGHT_Y: 16,
+  BOTTOM_RIGHT_Y: 0,
 } as const;
 
 /** Matches `overlay_screen_inset::MEDIUM` (default tray tier). */
@@ -30,9 +30,9 @@ export const OVERLAY_SCREEN_INSET_MEDIUM = {
   TOP_RIGHT_X: 0,
   TOP_RIGHT_Y: 5,
   BOTTOM_LEFT_X: 0,
-  BOTTOM_LEFT_Y: 35,
+  BOTTOM_LEFT_Y: 0,
   BOTTOM_RIGHT_X: 0,
-  BOTTOM_RIGHT_Y: 35,
+  BOTTOM_RIGHT_Y: 0,
 } as const;
 
 export const OVERLAY_SCREEN_INSET_LARGE = {
@@ -41,9 +41,9 @@ export const OVERLAY_SCREEN_INSET_LARGE = {
   TOP_RIGHT_X: 0,
   TOP_RIGHT_Y: 0,
   BOTTOM_LEFT_X: 0,
-  BOTTOM_LEFT_Y: 58,
+  BOTTOM_LEFT_Y: 0,
   BOTTOM_RIGHT_X: 0,
-  BOTTOM_RIGHT_Y: 58,
+  BOTTOM_RIGHT_Y: 0,
 } as const;
 
 export type OverlayScreenInsetTable = {
@@ -67,6 +67,30 @@ export function overlayScreenInsetForTextSize(
       return OVERLAY_SCREEN_INSET_LARGE;
     default:
       return OVERLAY_SCREEN_INSET_MEDIUM;
+  }
+}
+
+/**
+ * Linux shifts bottom-anchored content to account for WebView whitespace and
+ * glyph bearings, making its visible bottom gap match the visible side gap.
+ * Mutter clamps negative native offsets, so Small and Medium are corrected
+ * inside the WebView; Large retains a small native offset.
+ */
+export function bottomContentCompensationPx(
+  corner: PositionCorner,
+  textSize: OverlayTextSize,
+  isLinux: boolean,
+): number {
+  const isBottom = corner === 'bottomLeft' || corner === 'bottomRight';
+  if (!isLinux || !isBottom) return 0;
+
+  switch (textSize) {
+    case 'small':
+      return 30;
+    case 'medium':
+      return 11;
+    default:
+      return 0;
   }
 }
 

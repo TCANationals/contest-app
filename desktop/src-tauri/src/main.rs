@@ -33,6 +33,11 @@ use tca_timer_ipc_server::Handler;
 
 const OVERLAY_LABEL: &str = "overlay";
 const TOPMOST_REASSERT_INTERVAL: Duration = Duration::from_secs(2);
+const STARTUP_POSITION_REASSERT_DELAYS: [Duration; 3] = [
+    Duration::from_millis(100),
+    Duration::from_millis(400),
+    Duration::from_millis(500),
+];
 
 /// Gap between the overlay window and the **monitor work-area** edge, in
 /// **logical** pixels. Values are multiplied by the monitor `scale_factor`
@@ -48,6 +53,8 @@ const TOPMOST_REASSERT_INTERVAL: Duration = Duration::from_secs(2);
 mod overlay_screen_inset {
     use crate::preferences::TextSize;
 
+    const LINUX_VISUAL_BOTTOM_ADJUSTMENT: f64 = 47.0;
+
     #[derive(Clone, Copy)]
     pub struct CornerInsets {
         pub top_left_x: f64,
@@ -60,15 +67,17 @@ mod overlay_screen_inset {
         pub bottom_right_y: f64,
     }
 
-    /// Smaller typography → slightly tighter margins.
+    /// Raw values preserve the established Windows size-tier spacing. Linux
+    /// normalizes bottom values in `for_text_size` to compensate for the fixed
+    /// WebView's inverse size-dependent whitespace and glyph bearings.
     const SMALL: CornerInsets = CornerInsets {
         top_left_x: 12.0,
         top_left_y: 4.0,
-        top_right_x: 12.0,
+        top_right_x: 15.0,
         top_right_y: 4.0,
         bottom_left_x: 12.0,
         bottom_left_y: 16.0,
-        bottom_right_x: 12.0,
+        bottom_right_x: 15.0,
         bottom_right_y: 16.0,
     };
 
@@ -96,11 +105,37 @@ mod overlay_screen_inset {
         bottom_right_y: 58.0,
     };
 
+    fn linux_bottom_inset(raw_inset: f64) -> f64 {
+        // Mutter clamps windows that extend below the display. Native placement
+        // therefore handles only non-negative compensation; the remaining
+        // small/medium adjustment is applied inside the WebView.
+        (raw_inset - LINUX_VISUAL_BOTTOM_ADJUSTMENT).max(0.0)
+    }
+
     pub fn for_text_size(size: TextSize) -> CornerInsets {
-        match size {
+        let mut insets = match size {
             TextSize::Small => SMALL,
             TextSize::Medium => MEDIUM,
             TextSize::Large => LARGE,
+        };
+
+        if cfg!(target_os = "linux") {
+            insets.bottom_left_y = linux_bottom_inset(insets.bottom_left_y);
+            insets.bottom_right_y = linux_bottom_inset(insets.bottom_right_y);
+        }
+
+        insets
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn linux_bottom_insets_equalize_visible_corner_gaps() {
+            assert_eq!(linux_bottom_inset(SMALL.bottom_right_y), 0.0);
+            assert_eq!(linux_bottom_inset(MEDIUM.bottom_right_y), 0.0);
+            assert_eq!(linux_bottom_inset(LARGE.bottom_right_y), 11.0);
         }
     }
 }
@@ -348,11 +383,24 @@ fn apply_corner(app: &AppHandle, corner: Corner) {
     let Some(window) = app.get_webview_window(OVERLAY_LABEL) else {
         return;
     };
-    let monitor = match window.current_monitor() {
-        Ok(Some(m)) => m,
-        _ => return,
+    // During GTK startup the window may not be mapped yet, so
+    // `current_monitor` can temporarily be `None`. Falling back to the
+    // primary monitor keeps startup placement on the same code path as a
+    // later tray-menu reposition instead of accepting the window manager's
+    // edge-flush default.
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
     };
-    let size = match window.outer_size() {
+    // Mutter can advertise a non-zero top frame extent for this undecorated
+    // GTK window (37 px on Ubuntu 24.04). `outer_size` includes that invisible
+    // extent, which leaves the visible client area the same distance above a
+    // bottom edge. Anchor using the actual WebView/client dimensions instead.
+    let size = match window.inner_size() {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -431,6 +479,25 @@ fn spawn_topmost_watchdog(app: AppHandle) {
 /// option is used; read by the scale-factor handler so multi-monitor /
 /// DPI-change events re-pin to the user's latest choice (§9.2).
 pub type CurrentCorner = Arc<Mutex<Corner>>;
+
+/// GTK can accept the initial position before mapping the window and then let
+/// the window manager replace it. Reapply during the first second after
+/// startup, reading `current_corner` each time so a concurrent tray choice is
+/// preserved rather than overwritten with the bootstrap value.
+fn spawn_startup_position_reassertions(app: AppHandle, current_corner: CurrentCorner) {
+    thread::Builder::new()
+        .name("timer-startup-position".into())
+        .spawn(move || {
+            for delay in STARTUP_POSITION_REASSERT_DELAYS {
+                thread::sleep(delay);
+                let corner = *current_corner
+                    .lock()
+                    .expect("current-corner mutex poisoned");
+                apply_corner(&app, corner);
+            }
+        })
+        .expect("failed to spawn startup-position thread");
+}
 
 /// Label shown on the visibility toggle menu item for a given overlay
 /// visibility. Pulled out of `build_tray` so the main.rs
@@ -974,6 +1041,7 @@ fn main() {
                     .lock()
                     .expect("current-corner mutex poisoned"),
             );
+            spawn_startup_position_reassertions(handle.clone(), current_corner.clone());
             ensure_overlay_topmost(&handle);
             spawn_topmost_watchdog(handle.clone());
 
