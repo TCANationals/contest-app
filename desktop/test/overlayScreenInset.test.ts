@@ -21,13 +21,15 @@ describe('overlayScreenInsetForTextSize', () => {
     );
   });
 
-  it('orders bottom-edge padding small ≤ medium ≤ large', () => {
-    expect(OVERLAY_SCREEN_INSET_SMALL.BOTTOM_RIGHT_Y).toBeLessThanOrEqual(
-      OVERLAY_SCREEN_INSET_MEDIUM.BOTTOM_RIGHT_Y,
-    );
-    expect(OVERLAY_SCREEN_INSET_MEDIUM.BOTTOM_RIGHT_Y).toBeLessThanOrEqual(
-      OVERLAY_SCREEN_INSET_LARGE.BOTTOM_RIGHT_Y,
-    );
+  it('keeps every bottom position flush across text-size tiers', () => {
+    for (const inset of [
+      OVERLAY_SCREEN_INSET_SMALL,
+      OVERLAY_SCREEN_INSET_MEDIUM,
+      OVERLAY_SCREEN_INSET_LARGE,
+    ]) {
+      expect(inset.BOTTOM_LEFT_Y).toBe(0);
+      expect(inset.BOTTOM_RIGHT_Y).toBe(0);
+    }
   });
 });
 
@@ -41,9 +43,10 @@ describe('overlayPaddingPx', () => {
     });
   });
 
-  it('scales bottom-right padding by tier', () => {
-    const small = overlayPaddingPx('bottomRight', 'small');
-    const large = overlayPaddingPx('bottomRight', 'large');
-    expect(small.paddingBottom).toBeLessThan(large.paddingBottom);
+  it('does not add in-window padding to bottom positions', () => {
+    for (const size of ['small', 'medium', 'large'] as const) {
+      expect(overlayPaddingPx('bottomLeft', size).paddingBottom).toBe(0);
+      expect(overlayPaddingPx('bottomRight', size).paddingBottom).toBe(0);
+    }
   });
 });

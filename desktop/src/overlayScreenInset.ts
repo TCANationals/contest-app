@@ -18,9 +18,9 @@ export const OVERLAY_SCREEN_INSET_SMALL = {
   TOP_RIGHT_X: 0,
   TOP_RIGHT_Y: 4,
   BOTTOM_LEFT_X: 0,
-  BOTTOM_LEFT_Y: 16,
+  BOTTOM_LEFT_Y: 0,
   BOTTOM_RIGHT_X: 0,
-  BOTTOM_RIGHT_Y: 16,
+  BOTTOM_RIGHT_Y: 0,
 } as const;
 
 /** Matches `overlay_screen_inset::MEDIUM` (default tray tier). */
@@ -30,9 +30,9 @@ export const OVERLAY_SCREEN_INSET_MEDIUM = {
   TOP_RIGHT_X: 0,
   TOP_RIGHT_Y: 5,
   BOTTOM_LEFT_X: 0,
-  BOTTOM_LEFT_Y: 35,
+  BOTTOM_LEFT_Y: 0,
   BOTTOM_RIGHT_X: 0,
-  BOTTOM_RIGHT_Y: 35,
+  BOTTOM_RIGHT_Y: 0,
 } as const;
 
 export const OVERLAY_SCREEN_INSET_LARGE = {
@@ -41,9 +41,9 @@ export const OVERLAY_SCREEN_INSET_LARGE = {
   TOP_RIGHT_X: 0,
   TOP_RIGHT_Y: 0,
   BOTTOM_LEFT_X: 0,
-  BOTTOM_LEFT_Y: 58,
+  BOTTOM_LEFT_Y: 0,
   BOTTOM_RIGHT_X: 0,
-  BOTTOM_RIGHT_Y: 58,
+  BOTTOM_RIGHT_Y: 0,
 } as const;
 
 export type OverlayScreenInsetTable = {

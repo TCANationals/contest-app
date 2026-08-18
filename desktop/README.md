@@ -163,7 +163,16 @@ On Linux, the app defaults GTK to X11/XWayland when an X display is
 available because native Wayland does not support absolute application
 window positioning. This is required for exact corner anchoring. An explicit
 `GDK_BACKEND` value is preserved; on a pure-Wayland system the compositor
-controls placement.
+controls placement. The window uses fixed 400×96 min/max constraints while
+remaining natively resizable; setting GTK 3's resizable flag to false causes
+it to replace the requested 96 px overlay height with a 200 px minimum. Bottom
+positions use a zero vertical screen inset and zero bottom content padding so
+startup and tray-driven repositioning both remain flush with the display edge.
+If GTK has not mapped the window during startup, positioning falls back to the
+primary monitor and is reasserted during the first second after mapping so
+right-side positions consistently keep their 15 px inset. Corner calculations
+use the client size because Mutter can report an invisible frame extent for an
+undecorated GTK window; including that extent creates a false bottom gap.
 
 ### Linux system deps for Tauri
 
