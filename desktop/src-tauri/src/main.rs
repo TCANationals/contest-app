@@ -53,7 +53,7 @@ const STARTUP_POSITION_REASSERT_DELAYS: [Duration; 3] = [
 mod overlay_screen_inset {
     use crate::preferences::TextSize;
 
-    const MEDIUM_BOTTOM_BASELINE: f64 = 35.0;
+    const LINUX_VISUAL_BOTTOM_ADJUSTMENT: f64 = 47.0;
 
     #[derive(Clone, Copy)]
     pub struct CornerInsets {
@@ -68,8 +68,8 @@ mod overlay_screen_inset {
     }
 
     /// Raw values preserve the established Windows size-tier spacing. Linux
-    /// normalizes bottom values around the medium tier in `for_text_size` to
-    /// compensate for the fixed WebView's inverse size-dependent whitespace.
+    /// normalizes bottom values in `for_text_size` to compensate for the fixed
+    /// WebView's inverse size-dependent whitespace and glyph bearings.
     const SMALL: CornerInsets = CornerInsets {
         top_left_x: 12.0,
         top_left_y: 4.0,
@@ -106,10 +106,10 @@ mod overlay_screen_inset {
     };
 
     fn linux_bottom_inset(raw_inset: f64) -> f64 {
-        // Mutter clamps windows that extend below the display, so the small
-        // tier's -19 px delta is applied inside the WebView instead. Native
-        // placement handles only non-negative compensation.
-        (raw_inset - MEDIUM_BOTTOM_BASELINE).max(0.0)
+        // Mutter clamps windows that extend below the display. Native placement
+        // therefore handles only non-negative compensation; the remaining
+        // small/medium adjustment is applied inside the WebView.
+        (raw_inset - LINUX_VISUAL_BOTTOM_ADJUSTMENT).max(0.0)
     }
 
     pub fn for_text_size(size: TextSize) -> CornerInsets {
@@ -132,10 +132,10 @@ mod overlay_screen_inset {
         use super::*;
 
         #[test]
-        fn linux_bottom_insets_preserve_tier_deltas_around_medium() {
+        fn linux_bottom_insets_equalize_visible_corner_gaps() {
             assert_eq!(linux_bottom_inset(SMALL.bottom_right_y), 0.0);
             assert_eq!(linux_bottom_inset(MEDIUM.bottom_right_y), 0.0);
-            assert_eq!(linux_bottom_inset(LARGE.bottom_right_y), 23.0);
+            assert_eq!(linux_bottom_inset(LARGE.bottom_right_y), 11.0);
         }
     }
 }

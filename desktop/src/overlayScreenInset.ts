@@ -71,9 +71,10 @@ export function overlayScreenInsetForTextSize(
 }
 
 /**
- * Mutter will not place the small overlay 19 px beyond the bottom edge, so
- * Linux applies that tier's negative relative offset to the content instead.
- * Medium is the unchanged baseline; Large is compensated by native placement.
+ * Linux shifts bottom-anchored content to account for WebView whitespace and
+ * glyph bearings, making its visible bottom gap match the visible side gap.
+ * Mutter clamps negative native offsets, so Small and Medium are corrected
+ * inside the WebView; Large retains a small native offset.
  */
 export function bottomContentCompensationPx(
   corner: PositionCorner,
@@ -81,7 +82,16 @@ export function bottomContentCompensationPx(
   isLinux: boolean,
 ): number {
   const isBottom = corner === 'bottomLeft' || corner === 'bottomRight';
-  return isLinux && isBottom && textSize === 'small' ? 19 : 0;
+  if (!isLinux || !isBottom) return 0;
+
+  switch (textSize) {
+    case 'small':
+      return 30;
+    case 'medium':
+      return 11;
+    default:
+      return 0;
+  }
 }
 
 export function overlayPaddingPx(

@@ -53,15 +53,17 @@ describe('overlayPaddingPx', () => {
 });
 
 describe('bottomContentCompensationPx', () => {
-  it('applies the clamped Linux small-tier delta at bottom corners', () => {
-    expect(bottomContentCompensationPx('bottomLeft', 'small', true)).toBe(19);
-    expect(bottomContentCompensationPx('bottomRight', 'small', true)).toBe(19);
+  it('equalizes the visible Linux bottom and side gaps at bottom corners', () => {
+    expect(bottomContentCompensationPx('bottomLeft', 'small', true)).toBe(30);
+    expect(bottomContentCompensationPx('bottomRight', 'small', true)).toBe(30);
+    expect(bottomContentCompensationPx('bottomLeft', 'medium', true)).toBe(11);
+    expect(bottomContentCompensationPx('bottomRight', 'medium', true)).toBe(11);
   });
 
-  it('leaves the medium baseline, large native offset, top, and other OSes alone', () => {
-    expect(bottomContentCompensationPx('bottomRight', 'medium', true)).toBe(0);
+  it('leaves the large native offset, top, and other OSes alone', () => {
     expect(bottomContentCompensationPx('bottomRight', 'large', true)).toBe(0);
     expect(bottomContentCompensationPx('topRight', 'small', true)).toBe(0);
     expect(bottomContentCompensationPx('bottomRight', 'small', false)).toBe(0);
+    expect(bottomContentCompensationPx('bottomRight', 'medium', false)).toBe(0);
   });
 });

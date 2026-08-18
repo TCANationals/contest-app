@@ -166,11 +166,12 @@ window positioning. This is required for exact corner anchoring. An explicit
 controls placement. The window uses fixed 400×96 min/max constraints while
 remaining natively resizable; setting GTK 3's resizable flag to false causes
 it to replace the requested 96 px overlay height with a 200 px minimum. Linux
-bottom placement preserves the established size-tier differences relative to
-medium. Medium keeps a 0 px offset, Large uses a 23 px native offset, and Small
-shifts its WebView content down 19 px because Mutter clamps negative native
-window offsets. Together these compensate for the fixed WebView's 46/27/6 px
-internal whitespace without changing the correct medium tier.
+bottom placement compensates for the fixed WebView's size-dependent internal
+whitespace and the rendered glyph bearings. Small and Medium shift their
+WebView content down 30 px and 11 px respectively because Mutter clamps
+negative native window offsets; Large uses an 11 px native offset. The result
+is equal visible padding from the two screen edges at a bottom corner while
+leaving the established Windows placement unchanged.
 If GTK has not mapped the window during startup, positioning falls back to the
 primary monitor and is reasserted during the first second after mapping so
 right-side positions consistently keep their 15 px inset. Corner calculations
