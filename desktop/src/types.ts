@@ -31,10 +31,10 @@ export interface DesktopConfig {
   hideExit: boolean;
   /** Machine-wide initial corner; a saved user preference wins. */
   defaultPosition: PositionCorner;
-  // Windows-only: optional argv to invoke whenever the display
-  // configuration changes. Mirrors the BgInfo refresh hook from the
-  // legacy Electron app. Omitted from the payload when the config does
-  // not specify one (the Rust side serializes with skip_serializing_if).
+  // Optional argv to invoke whenever the display configuration changes.
+  // Mirrors the BgInfo refresh hook from the legacy Electron app. Omitted
+  // from the payload when the config does not specify one (the Rust side
+  // serializes with skip_serializing_if).
   displayChangeCommand?: string[];
 }
 

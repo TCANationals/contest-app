@@ -15,7 +15,7 @@
 //! 3. Config file: `%PROGRAMDATA%\Timer\config.json` on Windows,
 //!    `/Library/Application Support/Timer/config.json` on macOS, and
 //!    `/etc/timer/config.json` on Linux. JSON keys `roomKey`, `server`,
-//!    `hideExit`, `defaultPosition`.
+//!    `hideExit`, `defaultPosition`, `displayChangeCommand`.
 //! 4. Environment variables: `TCA_TIMER_ROOM_KEY`, `TCA_TIMER_SERVER`,
 //!    `TCA_TIMER_HIDE_EXIT`, `TCA_TIMER_DEFAULT_POSITION`.
 //!
@@ -49,12 +49,11 @@ pub struct DesktopConfig {
     /// Machine-wide initial corner. A valid per-user preferences file
     /// remains authoritative over this value.
     pub default_position: Corner,
-    /// Optional command line to invoke whenever the Windows display
-    /// configuration changes (resolution, DPI, monitor add/remove). The
+    /// Optional command line to invoke whenever the display configuration
+    /// changes (resolution, DPI, monitor add/remove). The
     /// first element is the program; remaining elements are arguments.
     /// Mirrors the old Electron app's BgInfo refresh hook
     /// (https://github.com/TCANationals/timer-desktop/blob/main/index.js).
-    /// Honored only on Windows; ignored on other platforms.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_change_command: Option<Vec<String>>,
 }

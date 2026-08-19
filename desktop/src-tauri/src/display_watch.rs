@@ -2,11 +2,10 @@
 //!
 //! Mirrors the behavior of the legacy Electron app
 //! ([`index.js`](https://github.com/TCANationals/timer-desktop/blob/main/index.js)):
-//! whenever the Windows display configuration changes — primary
+//! whenever the display configuration changes — primary
 //! resolution, DPI, monitor connect/disconnect — invoke an externally
-//! configured command (typically Sysinternals' `BgInfo.exe`) so the
-//! desktop wallpaper and any other resolution-dependent UI gets
-//! refreshed.
+//! configured command so desktop wallpaper and any other
+//! resolution-dependent UI can be refreshed.
 //!
 //! The watcher polls the monitor list every [`POLL_INTERVAL`] and fires
 //! the optional external command whenever the fingerprint changes. The
@@ -19,11 +18,6 @@
 //! as a safety net. The Tauri `WindowEvent::ScaleFactorChanged` handler
 //! in `main.rs` calls [`DisplayWatcher::trigger`] directly so DPI
 //! changes don't have to wait for the next poll tick.
-//!
-//! The command is **only spawned on Windows** — on macOS / Linux the
-//! watcher still runs (so we surface debug logging during dev) but
-//! [`spawn_command`] is a no-op. This matches the legacy app's
-//! `os.platform() != 'win32'` early-return.
 //!
 //! When a command is configured we also run it once at overlay startup
 //! ([`run_startup`]) so the desktop reflects the current layout even if
@@ -40,7 +34,7 @@ pub type MonitorChangeCallback = Arc<dyn Fn(&AppHandle) + Send + Sync>;
 
 /// Configuration for [`start`].
 pub struct WatchOptions {
-    /// Windows-only BgInfo-style refresh command; [`None`] skips spawning.
+    /// Display refresh command; [`None`] skips spawning.
     pub command_argv: Option<Vec<String>>,
     /// Overlay repositioning (and any similar work) when monitors move,
     /// resize, connect, or disconnect.
@@ -127,14 +121,23 @@ fn snapshot_monitors(app: &AppHandle) -> Option<Vec<MonitorFingerprint>> {
 /// we'd miss a rapid second display change (e.g. user toggling
 /// projector mode). Errors are logged to stderr and otherwise ignored —
 /// a missing or unreadable command must not crash the overlay.
-#[cfg(windows)]
 fn spawn_command(argv: &[String]) {
     use std::process::Command;
+
+    spawn_command_with(argv, |program, args| {
+        Command::new(program).args(args).spawn().map(|_| ())
+    });
+}
+
+fn spawn_command_with<F>(argv: &[String], launch: F)
+where
+    F: FnOnce(&str, &[String]) -> std::io::Result<()>,
+{
     let Some((program, args)) = argv.split_first() else {
         return;
     };
-    match Command::new(program).args(args).spawn() {
-        Ok(_child) => {
+    match launch(program, args) {
+        Ok(()) => {
             eprintln!(
                 "tca-timer: display-change command spawned: {} ({} args)",
                 program,
@@ -147,17 +150,6 @@ fn spawn_command(argv: &[String]) {
                 program
             );
         }
-    }
-}
-
-#[cfg(not(windows))]
-fn spawn_command(argv: &[String]) {
-    // Match the legacy Electron app: the BgInfo refresh hook is a
-    // Windows-only concept (it pokes Win32 shell APIs). On macOS /
-    // Linux we still emit a debug line so dev builds can confirm the
-    // watcher is wired up correctly.
-    if let Some(program) = argv.first() {
-        eprintln!("tca-timer: display-change detected; not spawning {program} (non-Windows host)");
     }
 }
 
@@ -334,5 +326,24 @@ mod tests {
             fp("HDMI-1", 0, -1080, 1920, 1080, 1.0),
         ];
         assert_ne!(normalize(before), normalize(after));
+    }
+
+    #[test]
+    fn spawn_command_forwards_program_and_arguments_to_launcher() {
+        let argv = vec![
+            "refresh-desktop".to_string(),
+            "--display".to_string(),
+            "primary".to_string(),
+        ];
+        let mut launched = false;
+
+        spawn_command_with(&argv, |program, args| {
+            launched = true;
+            assert_eq!(program, "refresh-desktop");
+            assert_eq!(args, ["--display", "primary"]);
+            Ok(())
+        });
+
+        assert!(launched);
     }
 }
